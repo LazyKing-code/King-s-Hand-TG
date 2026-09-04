@@ -1,0 +1,5 @@
+python-telegram-bot==22.5
+python-dotenv==1.1.1
+nudenet==3.4.2
+onnxruntime==1.23.2
+Pillow==11.3.0

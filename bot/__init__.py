@@ -1,0 +1,1 @@
+# NSFW sticker moderation bot
