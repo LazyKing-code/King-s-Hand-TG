@@ -17,6 +17,4 @@ COPY assets ./assets
 ENV PYTHONUNBUFFERED=1
 ENV DATA_DIR=/data
 
-VOLUME ["/data"]
-
 CMD ["python", "-m", "bot.main"]
