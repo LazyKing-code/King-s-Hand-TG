@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+data/
+*.db
+nudenet_classifier_model*
+classifier_model*
+.idea/
+.vscode/

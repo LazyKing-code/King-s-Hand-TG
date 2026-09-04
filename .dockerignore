@@ -1,0 +1,13 @@
+.venv
+venv
+.git
+data
+*.db
+.env
+__pycache__
+*.pyc
+.idea
+.vscode
+nudenet_classifier_model*
+classifier_model*
+assets/kings-hand-profile.png
