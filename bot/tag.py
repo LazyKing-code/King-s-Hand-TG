@@ -10,6 +10,7 @@ from telegram import ChatMember, Update
 from telegram.ext import ContextTypes
 
 from bot import db
+from bot.commands import cmd
 from bot.fun import resolve_member
 from bot.moderation import mention, require_group_admin
 
@@ -80,8 +81,8 @@ async def cmd_tag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not target:
         await msg.reply_text(
             "Reply to someone, or add their username.\n"
-            "Example: /tag @user captain\n"
-            "Clear: /tag @user null"
+            f"Example: {cmd('tag')} @user captain\n"
+            f"Clear: {cmd('tag')} @user null"
         )
         return
     if target.is_bot:
@@ -121,5 +122,5 @@ async def cmd_tag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await msg.reply_html(
         f"Saved <b>{escape(nick)}</b> for {mention(target)}.\n"
         "The small tag beside a name only works for admins. "
-        "/makeadmin them first if you want it visible in the member list."
+        f"{cmd('makeadmin')} them first if you want it visible in the member list."
     )

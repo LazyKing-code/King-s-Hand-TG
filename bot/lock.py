@@ -7,6 +7,7 @@ from telegram import ChatPermissions, Update
 from telegram.ext import ContextTypes
 
 from bot import db
+from bot.commands import cmd
 from bot.moderation import require_group_admin, send_to_log
 
 log = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(f"Chat is {state}.")
         return
     if db.is_locked(chat.id):
-        await update.effective_message.reply_text("Already locked. /unlock to open it.")
+        await update.effective_message.reply_text(f"Already locked. {cmd('unlock')} to open it.")
         return
     try:
         full = await context.bot.get_chat(chat.id)
@@ -111,7 +112,7 @@ async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     await update.effective_message.reply_text(
-        "Chat locked. Members cannot send messages. Admins still can.\n/unlock to restore."
+        f"Chat locked. Members cannot send messages. Admins still can.\n{cmd('unlock')} to restore."
     )
     await send_to_log(context, chat.id, "Chat locked for members.", event="Lock")
 

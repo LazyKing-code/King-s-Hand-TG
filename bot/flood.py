@@ -8,6 +8,7 @@ from telegram import Update
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
+from bot.commands import cmd
 from bot import db
 from bot.lock import LOCKED
 from bot.moderation import is_immune, is_owner, mention, require_group_admin, send_to_log
@@ -30,10 +31,10 @@ async def cmd_flood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(
             f"Anti-flood is {state}.\n"
             f"Trigger: {limit} messages in {window}s → mute {mute // 60} min.\n\n"
-            "/flood on\n"
-            "/flood off\n"
-            "/flood 6 4     (6 messages in 4 seconds)\n"
-            "/floodmute 10m"
+            f"{cmd('flood')} on\n"
+            f"{cmd('flood')} off\n"
+            f"{cmd('flood')} 6 4     (6 messages in 4 seconds)\n"
+            f"{cmd('floodmute')} 10m"
         )
         return
     if args[0] in {"on", "enable"}:
@@ -55,18 +56,20 @@ async def cmd_flood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Anti-flood on. {new_limit} messages in {new_window}s will mute."
         )
         return
-    await update.effective_message.reply_text("Try /flood on, /flood off, or /flood 6 4")
+    await update.effective_message.reply_text(
+        f"Try {cmd('flood')} on, {cmd('flood')} off, or {cmd('flood')} 6 4"
+    )
 
 
 async def cmd_floodmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_group_admin(update):
         return
     if not context.args:
-        await update.effective_message.reply_text("Example: /floodmute 10m")
+        await update.effective_message.reply_text(f"Example: {cmd('floodmute')} 10m")
         return
     seconds = parse_duration(context.args[0])
     if not seconds:
-        await update.effective_message.reply_text("Use 1m–7d, e.g. /floodmute 10m")
+        await update.effective_message.reply_text(f"Use 1m–7d, e.g. {cmd('floodmute')} 10m")
         return
     db.set_flood_mute(update.effective_chat.id, seconds)
     await update.effective_message.reply_text(f"Flood mute set to {seconds // 60} min.")

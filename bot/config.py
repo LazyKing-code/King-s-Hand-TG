@@ -32,6 +32,16 @@ OWNER_ID = next(iter(sorted(OWNER_IDS)), 0)
 NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.55"))
 IMMUNE_IDS = parse_id_list(os.getenv("IMMUNE_IDS", "")) | set(OWNER_IDS)
 
+# Telegram command names cannot use a hyphen. Example: kh_  →  /kh_help  /kh_kick
+_raw_prefix = os.getenv("COMMAND_PREFIX", "kh_").strip().lstrip("/")
+_raw_prefix = _raw_prefix.replace("-", "_")
+_raw_prefix = "".join(ch for ch in _raw_prefix if ch.isalnum() or ch == "_").lower()
+if not _raw_prefix or _raw_prefix in {"!", "."}:
+    _raw_prefix = "kh_"
+if not _raw_prefix.endswith("_"):
+    _raw_prefix += "_"
+COMMAND_PREFIX = _raw_prefix[:8]
+
 # Pack names containing these tokens are treated as NSFW without scanning.
 PACK_KEYWORDS = (
     "nsfw",

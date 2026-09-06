@@ -8,6 +8,7 @@ from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from bot import db
+from bot.commands import cmd
 from bot.config import IMMUNE_IDS, OWNER_IDS
 from bot.placeholder import ensure_placeholder_file
 
@@ -216,21 +217,80 @@ async def format_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id:
         return f"<code>{user_id}</code>"
 
 
+def _admin_rights_kwargs(bot_member, chat, *, grant: bool) -> dict:
+    """Only set rights Telegram allows this bot to grant. Skip forum-only flags
+    on normal groups — passing can_manage_topics there makes promote fail."""
+
+    def bit(name: str) -> bool:
+        return bool(grant and getattr(bot_member, name, False))
+
+    flags = {
+        "is_anonymous": False,
+        "can_manage_chat": bit("can_manage_chat"),
+        "can_delete_messages": bit("can_delete_messages"),
+        "can_manage_video_chats": bit("can_manage_video_chats"),
+        "can_restrict_members": False,
+        "can_promote_members": False,
+        "can_change_info": False,
+        "can_invite_users": bit("can_invite_users"),
+        "can_pin_messages": bit("can_pin_messages"),
+    }
+    if getattr(chat, "is_forum", False):
+        flags["can_manage_topics"] = False
+    return flags
+
+
+def _has_grantable_right(flags: dict) -> bool:
+    return any(
+        flags.get(name)
+        for name in (
+            "can_manage_chat",
+            "can_delete_messages",
+            "can_manage_video_chats",
+            "can_invite_users",
+            "can_pin_messages",
+        )
+    )
+
+
+async def promote_limited(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat,
+    user_id: int,
+) -> None:
+    bot_id = context.bot.id
+    me = await context.bot.get_chat_member(chat.id, bot_id)
+    if me.status not in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+        raise ValueError("I am not an admin in this group.")
+    if me.status == ChatMember.ADMINISTRATOR and not me.can_promote_members:
+        raise ValueError("I need the Add new admins permission.")
+    flags = _admin_rights_kwargs(me, chat, grant=True)
+    if not _has_grantable_right(flags):
+        raise ValueError(
+            "I need Delete messages (and ideally Pin messages and Invite users) "
+            "so I have something to grant."
+        )
+    target = await context.bot.get_chat_member(chat.id, user_id)
+    if target.status == ChatMember.OWNER:
+        raise ValueError("They already own the group.")
+    if target.status == ChatMember.ADMINISTRATOR and not getattr(
+        target, "can_be_edited", False
+    ):
+        raise ValueError(
+            "They are already admin, and I did not promote them, so I cannot "
+            f"edit their rights. Drop them in Telegram, then {cmd('makeadmin')} again."
+        )
+    await context.bot.promote_chat_member(chat_id=chat.id, user_id=user_id, **flags)
+
+
 async def demote(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> bool:
     try:
+        chat = await context.bot.get_chat(chat_id)
+        me = await context.bot.get_chat_member(chat_id, context.bot.id)
         await context.bot.promote_chat_member(
             chat_id=chat_id,
             user_id=user_id,
-            is_anonymous=False,
-            can_manage_chat=False,
-            can_delete_messages=False,
-            can_manage_video_chats=False,
-            can_restrict_members=False,
-            can_promote_members=False,
-            can_change_info=False,
-            can_invite_users=False,
-            can_pin_messages=False,
-            can_manage_topics=False,
+            **_admin_rights_kwargs(me, chat, grant=False),
         )
         return True
     except Exception:
@@ -328,7 +388,7 @@ async def apply_punishment(
         await notify(
             context,
             chat_id,
-            f"{who} was on /approve. Approval removed for a banned sticker ({why}).\n"
+            f"{who} was on {cmd('approve')}. Approval removed for a banned sticker ({why}).\n"
             "Next time this happens, they will be kicked.",
             event="Unapproved",
         )
@@ -341,7 +401,7 @@ async def apply_punishment(
                     context,
                     chat_id,
                     f"Could not kick {who} while they are still admin. "
-                    "Drop them, then /makeadmin them through the bot.",
+                    f"Drop them, then {cmd('makeadmin')} them through the bot.",
                     event="Kick failed",
                 )
                 return
@@ -377,8 +437,8 @@ async def apply_punishment(
                 context,
                 chat_id,
                 f"{who} reached 3/3, but the bot could not demote them.\n"
-                "The bot can only demote admins <b>it</b> made with /makeadmin. "
-                "Drop them yourself, then reply with /makeadmin.",
+                f"The bot can only demote admins <b>it</b> made with {cmd('makeadmin')}. "
+                f"Drop them yourself, then reply with {cmd('makeadmin')}.",
                 event="Demote failed",
             )
         return
@@ -399,26 +459,60 @@ async def apply_punishment(
     await announce_kick(context, chat, user, reason, ok)
 
 
+_SKIP_USER_IDS = {777000, 1087968824}  # Telegram / Group Anonymous Bot
+
+
+async def _user_from_username(context: ContextTypes.DEFAULT_TYPE, username: str) -> User | None:
+    name = username.strip()
+    if not name:
+        return None
+    if not name.startswith("@"):
+        name = f"@{name}"
+    try:
+        info = await context.bot.get_chat(name)
+    except Exception:
+        return None
+    if info.type != ChatType.PRIVATE or not info.id:
+        return None
+    return User(
+        id=info.id,
+        is_bot=False,
+        first_name=info.first_name or name,
+        last_name=info.last_name,
+        username=info.username,
+    )
+
+
 async def resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> User | None:
     msg: Message = update.effective_message
-    if msg.reply_to_message and msg.reply_to_message.from_user:
-        return msg.reply_to_message.from_user
+    reply = msg.reply_to_message
+    if reply and reply.from_user:
+        uid = reply.from_user.id
+        if uid not in _SKIP_USER_IDS:
+            if not (reply.sender_chat and update.effective_chat
+                    and reply.sender_chat.id == update.effective_chat.id):
+                return reply.from_user
     if msg.entities:
         for entity in msg.entities:
             if entity.type == "text_mention" and entity.user:
                 return entity.user
+            if entity.type == "mention":
+                raw = (msg.text or msg.caption or "")[entity.offset : entity.offset + entity.length]
+                found = await _user_from_username(context, raw)
+                if found:
+                    return found
     args = context.args or []
     if not args:
         return None
-    raw = args[0].strip().lstrip("@")
-    if not raw.isdigit():
-        return None
-    uid = int(raw)
-    chat = update.effective_chat
-    if chat:
-        try:
-            member = await context.bot.get_chat_member(chat.id, uid)
-            return member.user
-        except Exception:
-            pass
-    return User(id=uid, first_name=str(uid), is_bot=False)
+    raw = args[0].strip()
+    if raw.lstrip("-").isdigit():
+        uid = int(raw)
+        chat = update.effective_chat
+        if chat:
+            try:
+                member = await context.bot.get_chat_member(chat.id, uid)
+                return member.user
+            except Exception:
+                pass
+        return User(id=uid, first_name=str(uid), is_bot=False)
+    return await _user_from_username(context, raw)

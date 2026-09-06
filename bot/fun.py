@@ -6,6 +6,7 @@ import random
 from telegram import Update, User
 from telegram.ext import ContextTypes
 
+from bot.commands import cmd
 from bot.moderation import mention, require_group
 
 log = logging.getLogger(__name__)
@@ -99,7 +100,7 @@ async def cmd_scold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not target:
         await msg.reply_text(
             "Reply to someone, or add their username.\n"
-            "Example: /scold @username"
+            f"Example: {cmd('scold')} @username"
         )
         return
     if target.is_bot:

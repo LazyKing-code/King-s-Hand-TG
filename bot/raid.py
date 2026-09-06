@@ -11,8 +11,10 @@ from telegram.error import RetryAfter, TelegramError
 from telegram.ext import ContextTypes
 
 from bot import db
+from bot.commands import cmd
 from bot.config import IMMUNE_IDS, OWNER_IDS
 from bot.moderation import is_immune, require_group_admin, require_group_owner, send_to_log
+from bot.welcome import on_user_joined, on_user_left
 
 log = logging.getLogger(__name__)
 
@@ -138,9 +140,11 @@ async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if user.is_bot and user.id == context.bot.id:
             continue
         _record_join(chat.id, user.id, is_bot=user.is_bot)
-        if await _maybe_raidmode_ban(context, chat.id, user.id):
+        banned = await _maybe_raidmode_ban(context, chat.id, user.id)
+        if banned:
             banned_any = True
-    if banned_any:
+        await on_user_joined(context, chat, user, banned=banned)
+    if banned_any or db.clean_service(chat.id):
         try:
             await message.delete()
         except Exception:
@@ -159,9 +163,11 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     new_status = result.new_chat_member.status
     if new_status in _IN_CHAT and old_status not in _IN_CHAT:
         _record_join(chat.id, user.id, is_bot=user.is_bot)
-        await _maybe_raidmode_ban(context, chat.id, user.id)
+        banned = await _maybe_raidmode_ban(context, chat.id, user.id)
+        await on_user_joined(context, chat, user, banned=banned)
     elif old_status in _IN_CHAT and new_status not in _IN_CHAT:
         db.forget_member(chat.id, user.id)
+        await on_user_left(context, chat, user, new_status)
 
 
 async def cmd_joins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -208,7 +214,7 @@ def _parse_purge_args(args: list[str]) -> tuple[int | None, str, bool, str | Non
             duration_raw = token
     seconds = parse_duration(duration_raw) if duration_raw else None
     if not seconds:
-        return None, mode, confirm, "Use /purgejoins 2h  (30m–7d). Add confirm to run."
+        return None, mode, confirm, f"Use {cmd('purgejoins')} 2h  (30m–7d). Add confirm to run."
     return seconds, mode, confirm, None
 
 
@@ -240,7 +246,7 @@ async def cmd_purgejoins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"Last {label}: {len(user_ids)} recorded joins, {skipped} protected (owners/admins/trusted).\n"
             f"I would {action} {len(targets)} account(s). This can take a while for large raids.\n"
             "I can only remove people I saw join while I was running.\n\n"
-            f"Send /purgejoins {dur_token} {kick_bit}confirm to start."
+            f"Send {cmd('purgejoins')} {dur_token} {kick_bit}confirm to start."
         )
         return
     if not targets:
@@ -351,11 +357,11 @@ async def cmd_raidmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if until > now:
             await update.effective_message.reply_text(
                 f"Raidmode is ON for another {format_duration(until - now)}. "
-                "New joins are auto-banned. /raidmode off to stop."
+                f"New joins are auto-banned. {cmd('raidmode')} off to stop."
             )
         else:
             await update.effective_message.reply_text(
-                "Raidmode is off. Example: /raidmode 1h  (30m–7d) to auto-ban new joins."
+                f"Raidmode is off. Example: {cmd('raidmode')} 1h  (30m–7d) to auto-ban new joins."
             )
         return
     if args[0] in {"off", "stop", "disable"}:
@@ -367,7 +373,7 @@ async def cmd_raidmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     seconds = parse_duration(args[0])
     if not seconds:
         await update.effective_message.reply_text(
-            "Use /raidmode 1h, /raidmode 6h, /raidmode 1d, or /raidmode off. Max 7 days."
+            f"Use {cmd('raidmode')} 1h, {cmd('raidmode')} 6h, {cmd('raidmode')} 1d, or {cmd('raidmode')} off. Max 7 days."
         )
         return
     until = int(time.time()) + seconds
@@ -375,7 +381,7 @@ async def cmd_raidmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     _RAIDMODE_STREAK[chat_id] = 0
     await update.effective_message.reply_text(
         f"Raidmode ON for {format_duration(seconds)}. New joins will be banned automatically.\n"
-        "Owners, admins, and /trust users are skipped. /raidmode off to stop."
+        f"Owners, admins, and {cmd('trust')} users are skipped. {cmd('raidmode')} off to stop."
     )
     await send_to_log(
         context,

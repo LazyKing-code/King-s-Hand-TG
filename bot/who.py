@@ -6,6 +6,7 @@ from telegram import ChatMember, Update, User
 from telegram.ext import ContextTypes
 
 from bot import db
+from bot.commands import cmd
 from bot.config import OWNER_IDS
 from bot.fun import resolve_member
 from bot.moderation import is_group_admin, is_owner, mention, require_group
@@ -65,17 +66,28 @@ async def member_card(update: Update, context: ContextTypes.DEFAULT_TYPE, user: 
         rank = "Member"
 
     can: list[str] = [
-        "Chat, stickers, /whisper, /scold, /help",
-        "/stats for yourself",
-        "/notag or /tagme for group pings",
+        f"Chat, stickers, {cmd('whisper')}, {cmd('scold')}, {cmd('help')}, "
+        f"{cmd('rules')}, {cmd('id')}",
+        f"{cmd('stats')} for yourself",
+        f"{cmd('notag')} or {cmd('tagme')} for group pings",
         "Math in a message by itself, like 2+2",
     ]
     cannot: list[str] = []
     if owner:
-        can.append("Every owner command: /tagall, /lock, /kick, /approve, logs, raid tools")
+        can.append(
+            f"Every owner command: {cmd('tagall')}, {cmd('lock')}, {cmd('kick')}, "
+            f"{cmd('approve')}, logs, raid tools"
+        )
     elif admin:
-        can.append("Admin tools: /lock, /flood, /report, /kick, /strikes, /tag, /joins")
-        cannot.append("Owner-only tools like /tagall, /approve, /trust, /makeadmin, /raidmode")
+        can.append(
+            f"Admin tools: {cmd('lock')}, {cmd('welcome')}, {cmd('ban')}, {cmd('mute')}, "
+            f"{cmd('warn')}, {cmd('kick')}, {cmd('flood')}, {cmd('report')}, "
+            f"{cmd('strikes')}, {cmd('tag')}, {cmd('joins')}"
+        )
+        cannot.append(
+            f"Owner-only tools like {cmd('tagall')}, {cmd('approve')}, {cmd('trust')}, "
+            f"{cmd('makeadmin')}, {cmd('raidmode')}"
+        )
     else:
         cannot.append("Lock, kick, raid, tag-all, and other staff commands")
 
@@ -110,6 +122,8 @@ async def member_card(update: Update, context: ContextTypes.DEFAULT_TYPE, user: 
         lines.append(f"Telegram: {pretty}")
     lines.append(f"Approved: {'yes' if approved else 'no'}")
     lines.append(f"Trusted (never punished): {'yes' if trusted or owner else 'no'}")
+    warns = db.get_warns(chat_id, uid)
+    lines.append(f"Staff warnings: {warns}/{db.warn_limit(chat_id)}")
     if kick_on_next:
         lines.append("Warnings: next banned sticker kicks")
     else:

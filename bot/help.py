@@ -5,82 +5,118 @@ from telegram.constants import ChatType
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
+from bot.commands import cmd
 from bot.invite import ADD_TEXT, bot_username, url_buttons
 
-PAGES: dict[str, str] = {
-    "index": (
-        "<b>King's Hand</b>\n"
-        "Anyone in the group can use these:\n\n"
-        "<b>/help</b> — this guide\n"
-        "<b>/whisper</b> — reply, then your private note. Only they can open it.\n"
-        "<blockquote>/whisper stay after the call</blockquote>\n"
-        "<b>/scold</b> — playful roast. Reply or add their username.\n"
-        "<blockquote>/scold\n/scold @username</blockquote>\n"
-        "<b>/stats</b> — your role, approval, warnings, and what you can do\n"
-        "<b>/notag</b> — skip group pings · <b>/tagme</b> — get them again\n\n"
-        "<b>Calculator</b> — no command. Send only the sum.\n"
-        "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>\n\n"
-        "Staff commands are in the buttons below."
-    ),
-    "you": (
-        "<b>Everyone</b>\n"
-        "These work for every member.\n\n"
-        "<b>/help</b> — this guide\n"
-        "<b>/whisper</b> — reply, then your private note. Only they can open it.\n"
-        "<blockquote>/whisper stay after the call</blockquote>\n"
-        "<b>/scold</b> — playful roast. Reply or add their username.\n"
-        "<blockquote>/scold\n/scold @username</blockquote>\n"
-        "<b>/stats</b> — your role, approval, warnings, and what you can do\n"
-        "<b>/notag</b> — skip group pings · <b>/tagme</b> — get them again\n\n"
-        "<b>Calculator</b> — no command. Send only the sum.\n"
-        "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>"
-    ),
-    "approved": (
-        "<b>Approved</b>\n"
-        "Same commands as everyone. Approval is not extra commands — "
-        "it is a sticker chance.\n\n"
-        "If a member keeps sending banned stickers, they get warnings, then a kick. "
-        "Approved people get <b>one extra chance</b>. The next banned sticker after that "
-        "still kicks.\n\n"
-        "They can still use /whisper, /scold, /stats, /notag, and the calculator.\n"
-        "They cannot lock the chat, kick, or ping everyone.\n\n"
-        "Only the owner can /approve or /unapprove someone."
-    ),
-    "admins": (
-        "<b>Admins</b>\n"
-        "Everything members have, plus keeping the room in order.\n\n"
-        "<b>/lock</b> · <b>/unlock</b> — freeze or open chat for members\n"
-        "<b>/flood</b> — mute people who burst messages\n"
-        "<blockquote>/flood on\n/flood 6 4\n/floodmute 10m\n/flood off</blockquote>\n"
-        "<b>/report</b> — reply to a sticker to ban that pack\n"
-        "<b>/kick</b> — remove someone (reply to them)\n"
-        "<b>/strikes</b> · <b>/forgive</b> — see or clear warnings\n"
-        "<b>/tag</b> — set a nickname. <code>/tag null</code> clears it\n"
-        "<b>/joins</b> — how many joins I have seen\n"
-        "<b>/stats</b> — reply to someone to see their status\n\n"
-        "Admins still cannot /tagall, /approve, /trust, /makeadmin, or raid tools."
-    ),
-    "owner": (
-        "<b>Owner</b>\n"
-        "Everything admins have, plus the keys.\n\n"
-        "<b>/tagall</b> — ping everyone without listing names\n"
-        "<blockquote>/tagall\n/tagall meeting in 5\n/tagall invite</blockquote>\n"
-        "<b>/approve</b> · <b>/unapprove</b> · <b>/trust</b> · <b>/untrust</b>\n"
-        "<b>/makeadmin</b> · <b>/dropadmin</b> · <b>/dropadmins confirm</b>\n"
-        "<b>/raidmode</b> · <b>/purgejoins</b>\n"
-        "<b>/setlog</b> — in the log chat: <code>/setlog here</code>. "
-        "In each main group: <code>/setlog</code>\n"
-        "<b>/setplaceholder</b> · <b>/setkickmsg</b>\n"
-        "<b>/allowpack</b> · <b>/allowsticker</b> — undo a false sticker ban\n"
-        "<b>/addowner</b> · <b>/removeowner</b> · <b>/owners</b>\n\n"
-        "You are never punished for stickers."
-    ),
-    "add": (
-        f"{ADD_TEXT}\n\n"
-        "Use the buttons under this message, or send <code>/start</code> here "
-        "and pick a group or channel from the list."
-    ),
-}
+
+def _pages() -> dict[str, str]:
+    return {
+        "index": (
+            "<b>King's Hand</b>\n"
+            f"Group commands look like <code>{cmd('help')}</code>, "
+            f"<code>{cmd('kick')}</code> — not <code>/help</code> / <code>/kick</code> "
+            "(those stay for other bots).\n"
+            f"Private chat: <code>/start</code> and <code>/help</code> still work.\n\n"
+            "Anyone in the group can use these:\n\n"
+            f"<b>{cmd('help')}</b> — this guide\n"
+            f"<b>{cmd('rules')}</b> — group rules\n"
+            f"<b>{cmd('id')}</b> — chat / user ids\n"
+            f"<b>{cmd('notes')}</b> · <b>#name</b> — saved notes\n"
+            f"<b>{cmd('staff')}</b> — reply to ping admins\n"
+            f"<b>{cmd('whisper')}</b> — reply, then your private note. Only they can open it.\n"
+            f"<blockquote>{cmd('whisper')} stay after the call</blockquote>\n"
+            f"<b>{cmd('scold')}</b> — playful roast. Reply or add their username.\n"
+            f"<blockquote>{cmd('scold')}\n{cmd('scold')} @username</blockquote>\n"
+            f"<b>{cmd('gamehelp')}</b> — games: toss, dice, lucky 7, stone-paper, hand cricket\n"
+            f"<blockquote>{cmd('daily')} · {cmd('top')} · {cmd('cricket')} @user</blockquote>\n"
+            f"<b>{cmd('stats')}</b> — your role, approval, warnings, and what you can do\n"
+            f"<b>{cmd('notag')}</b> — skip group pings · <b>{cmd('tagme')}</b> — get them again\n\n"
+            "<b>Calculator</b> — no command. Send only the sum.\n"
+            "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>\n\n"
+            "Staff commands are in the buttons below."
+        ),
+        "you": (
+            "<b>Everyone</b>\n"
+            "These work for every member.\n\n"
+            f"<b>{cmd('help')}</b> — this guide\n"
+            f"<b>{cmd('rules')}</b> — group rules\n"
+            f"<b>{cmd('id')}</b> — chat / user ids\n"
+            f"<b>{cmd('notes')}</b> · send <code>#name</code> for a saved note\n"
+            f"<b>{cmd('staff')}</b> — reply to a message to ping admins\n"
+            f"<b>{cmd('whisper')}</b> — reply, then your private note. Only they can open it.\n"
+            f"<blockquote>{cmd('whisper')} stay after the call</blockquote>\n"
+            f"<b>{cmd('scold')}</b> — playful roast. Reply or add their username.\n"
+            f"<blockquote>{cmd('scold')}\n{cmd('scold')} @username</blockquote>\n"
+            f"<b>{cmd('gamehelp')}</b> — how to play · {cmd('daily')} streak · {cmd('top')} board\n"
+            f"<b>{cmd('stats')}</b> — your role, approval, warnings, and what you can do\n"
+            f"<b>{cmd('notag')}</b> — skip group pings · <b>{cmd('tagme')}</b> — get them again\n\n"
+            "<b>Calculator</b> — no command. Send only the sum.\n"
+            "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>"
+        ),
+        "approved": (
+            "<b>Approved</b>\n"
+            "Same commands as everyone. Approval is not extra commands — "
+            "it is a sticker chance.\n\n"
+            "If a member keeps sending banned stickers, they get warnings, then a kick. "
+            "Approved people get <b>one extra chance</b>. The next banned sticker after that "
+            "still kicks.\n\n"
+            f"They can still use {cmd('whisper')}, {cmd('scold')}, {cmd('gamehelp')}, "
+            f"{cmd('stats')}, {cmd('notag')}, and the calculator.\n"
+            "They cannot lock the chat, kick, or ping everyone.\n\n"
+            f"Only the owner can {cmd('approve')} or {cmd('unapprove')} someone."
+        ),
+        "admins": (
+            "<b>Admins</b>\n"
+            "Everything members have, plus keeping the room in order.\n\n"
+            f"<b>{cmd('lock')}</b> · <b>{cmd('unlock')}</b> — freeze or open chat for members\n"
+            f"<b>{cmd('flood')}</b> — mute people who burst messages\n"
+            f"<blockquote>{cmd('flood')} on\n{cmd('flood')} 6 4\n"
+            f"{cmd('floodmute')} 10m\n{cmd('flood')} off</blockquote>\n"
+            f"<b>{cmd('welcome')}</b> · <b>{cmd('goodbye')}</b> — join/leave messages\n"
+            f"<b>{cmd('verify')}</b> · <b>{cmd('unverified')}</b> — join captcha; bots banned\n"
+            f"<b>{cmd('zombies')}</b> — deleted accounts; runs daily\n"
+            f"<b>{cmd('setrules')}</b> · <b>{cmd('cleanservice')}</b>\n"
+            f"<b>{cmd('ban')}</b> · <b>{cmd('unban')}</b> · <b>{cmd('mute')}</b> · "
+            f"<b>{cmd('unmute')}</b> · <b>{cmd('kick')}</b>\n"
+            f"<blockquote>{cmd('ban')} @user 1d reason\n{cmd('mute')} 10m</blockquote>\n"
+            f"<b>{cmd('warn')}</b> · <b>{cmd('warns')}</b> · <b>{cmd('resetwarns')}</b>\n"
+            f"<b>{cmd('pin')}</b> · <b>{cmd('unpin')}</b> · <b>{cmd('del')}</b> · "
+            f"<b>{cmd('purge')}</b>\n"
+            f"<b>{cmd('save')}</b> · <b>{cmd('filter')}</b> · <b>{cmd('blacklist')}</b>\n"
+            f"<b>{cmd('report')}</b> — reply to a sticker to ban that pack\n"
+            f"<b>{cmd('packs')}</b> — banned packs; tap Allow (no sticker reply)\n"
+            f"<b>{cmd('strikes')}</b> · <b>{cmd('forgive')}</b> — sticker warnings\n"
+            f"<b>{cmd('tag')}</b> — set a nickname. <code>{cmd('tag')} null</code> clears it\n"
+            f"<b>{cmd('joins')}</b> — how many joins I have seen\n"
+            f"<b>{cmd('stats')}</b> — reply to someone to see their status\n\n"
+            f"Admins still cannot {cmd('tagall')}, {cmd('approve')}, {cmd('trust')}, "
+            f"{cmd('makeadmin')}, or raid tools."
+        ),
+        "owner": (
+            "<b>Owner</b>\n"
+            "Everything admins have, plus the keys.\n\n"
+            f"<b>{cmd('tagall')}</b> — ping everyone without listing names\n"
+            f"<blockquote>{cmd('tagall')}\n{cmd('tagall')} meeting in 5\n"
+            f"{cmd('tagall')} invite</blockquote>\n"
+            f"<b>{cmd('approve')}</b> · <b>{cmd('unapprove')}</b> · "
+            f"<b>{cmd('trust')}</b> · <b>{cmd('untrust')}</b>\n"
+            f"<b>{cmd('makeadmin')}</b> · <b>{cmd('dropadmin')}</b> · "
+            f"<b>{cmd('dropadmins')} confirm</b>\n"
+            f"<b>{cmd('raidmode')}</b> · <b>{cmd('purgejoins')}</b>\n"
+            f"<b>{cmd('setlog')}</b> — in the log chat: <code>{cmd('setlog')} here</code>. "
+            f"In each main group: <code>{cmd('setlog')}</code>\n"
+            f"<b>{cmd('setplaceholder')}</b> · <b>{cmd('setkickmsg')}</b>\n"
+            f"<b>{cmd('allowpack')}</b> · <b>{cmd('allowsticker')}</b> · "
+            f"<b>{cmd('packs')}</b> — undo a false sticker ban\n"
+            f"<b>{cmd('addowner')}</b> · <b>{cmd('removeowner')}</b> · <b>{cmd('owners')}</b>\n\n"
+            "You are never punished for stickers."
+        ),
+        "add": (
+            f"{ADD_TEXT}\n\n"
+            "Use the buttons under this message, or send <code>/start</code> here "
+            "and pick a group or channel from the list."
+        ),
+    }
 
 
 def _is_private(update: Update) -> bool:
@@ -111,7 +147,8 @@ def _markup(key: str, username: str | None = None, *, private: bool = False) -> 
 
 
 def _page(key: str) -> str:
-    return PAGES.get(key, PAGES["index"])
+    pages = _pages()
+    return pages.get(key, pages["index"])
 
 
 _ALIASES = {
@@ -129,9 +166,17 @@ _ALIASES = {
     "whisper": "you",
     "scold": "you",
     "fun": "you",
+    "games": "you",
+    "gamehelp": "you",
     "calc": "you",
     "lock": "admins",
     "flood": "admins",
+    "welcome": "admins",
+    "ban": "admins",
+    "mute": "admins",
+    "warn": "admins",
+    "notes": "you",
+    "rules": "you",
     "sticker": "admins",
     "nsfw": "admins",
     "tag": "admins",
@@ -154,7 +199,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     private = _is_private(update)
     if context.args:
         raw = context.args[0].lower().strip()
-        key = _ALIASES.get(raw, raw if raw in PAGES else "index")
+        key = _ALIASES.get(raw, raw if raw in _pages() else "index")
     if key == "add" and not private:
         key = "index"
     username = await bot_username(context)

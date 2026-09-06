@@ -8,6 +8,7 @@ from telegram.error import Forbidden
 from telegram.ext import ContextTypes
 
 from bot import db
+from bot.commands import cmd
 from bot.moderation import mention, require_group
 
 log = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ async def cmd_whisper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not target or not secret:
         await msg.reply_text(
             "Reply to someone, then type the whisper.\n"
-            "Example: reply to them with /whisper stay after the call"
+            f"Example: reply to them with {cmd('whisper')} stay after the call"
         )
         return
     if target.id == user.id:

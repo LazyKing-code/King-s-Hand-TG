@@ -19,14 +19,28 @@ from telegram.ext import (
 )
 
 from bot import db
-from bot.config import BOT_TOKEN
+from bot.calc import on_calc
+from bot.commands import add_cmd, cmd, cmd_name
+from bot.config import BOT_TOKEN, COMMAND_PREFIX
 from bot.flood import cmd_flood, cmd_floodmute, on_flood
+from bot.fun import cmd_scold
+from bot.games import (
+    cmd_balance,
+    cmd_cricket,
+    cmd_daily,
+    cmd_dice,
+    cmd_gamehelp,
+    cmd_lucky7,
+    cmd_rps,
+    cmd_top,
+    cmd_toss,
+    on_game_callback,
+)
 from bot.handlers import (
     cmd_addowner,
     cmd_allowpack,
     cmd_allowsticker,
     cmd_approve,
-    cmd_blockpack,
     cmd_clearkickmsg,
     cmd_clearplaceholder,
     cmd_dropadmin,
@@ -36,6 +50,8 @@ from bot.handlers import (
     cmd_kickmsg,
     cmd_makeadmin,
     cmd_owners,
+    cmd_packs,
+    on_packs_callback,
     cmd_removeowner,
     cmd_report,
     cmd_setkickmsg,
@@ -50,14 +66,59 @@ from bot.handlers import (
     on_sticker,
     start,
 )
-from bot.calc import on_calc
-from bot.fun import cmd_scold
+from bot.groupmod import (
+    cmd_admins,
+    cmd_ban,
+    cmd_del,
+    cmd_id,
+    cmd_mute,
+    cmd_pin,
+    cmd_purge,
+    cmd_resetwarns,
+    cmd_staff,
+    cmd_unban,
+    cmd_unmute,
+    cmd_unpin,
+    cmd_unpinall,
+    cmd_warn,
+    cmd_warnlimit,
+    cmd_warns,
+    cmd_zombies,
+    daily_zombies_loop,
+)
 from bot.help import cmd_help, on_help_callback
 from bot.invite import on_chat_shared
 from bot.lock import cmd_lock, cmd_unlock
+from bot.notes import (
+    cmd_blacklist,
+    cmd_clear,
+    cmd_filter,
+    cmd_filters,
+    cmd_get,
+    cmd_notes,
+    cmd_save,
+    cmd_stop,
+    cmd_unblacklist,
+    on_triggers,
+)
 from bot.raid import cmd_joins, cmd_purgejoins, cmd_raidmode, on_chat_member, on_new_members
 from bot.tag import cmd_tag
 from bot.tagall import cmd_notag, cmd_tagall, cmd_tagme, on_seen, on_tagall_callback
+from bot.welcome import (
+    cmd_clearrules,
+    cmd_cleanservice,
+    cmd_goodbye,
+    cmd_rules,
+    cmd_setrules,
+    cmd_welcome,
+    on_left_service,
+)
+from bot.verify import (
+    cmd_unverified,
+    cmd_verify,
+    on_verify_callback,
+    schedule_pending_jobs,
+)
 from bot.whisper import cmd_whisper, on_whisper_callback
 from bot.who import cmd_stats
 
@@ -70,32 +131,58 @@ log = logging.getLogger(__name__)
 
 
 _MEMBER_COMMANDS = [
-    BotCommand("help", "What you can use"),
-    BotCommand("whisper", "Private note in the group"),
-    BotCommand("scold", "Playful scolding"),
-    BotCommand("stats", "Your status in this group"),
-    BotCommand("notag", "Skip group pings"),
-    BotCommand("tagme", "Include me in pings"),
+    ("help", "What you can use"),
+    ("rules", "Group rules"),
+    ("id", "Chat and user ids"),
+    ("notes", "Saved notes"),
+    ("whisper", "Private note in the group"),
+    ("scold", "Playful scolding"),
+    ("gamehelp", "How to play games"),
+    ("daily", "Daily game bonus"),
+    ("top", "Game leaderboard"),
+    ("stats", "Your status in this group"),
+    ("notag", "Skip group pings"),
+    ("tagme", "Include me in pings"),
 ]
 _STAFF_COMMANDS = _MEMBER_COMMANDS + [
-    BotCommand("lock", "Lock the chat"),
-    BotCommand("unlock", "Open the chat"),
-    BotCommand("flood", "Anti-flood settings"),
-    BotCommand("report", "Ban a sticker pack"),
-    BotCommand("kick", "Remove someone"),
-    BotCommand("strikes", "Show warnings"),
-    BotCommand("tag", "Set a member tag"),
-    BotCommand("joins", "Recent joins"),
-    BotCommand("tagall", "Ping everyone"),
-    BotCommand("setlog", "Link a log chat"),
-    BotCommand("makeadmin", "Grant admin through me"),
+    ("welcome", "Set the join message"),
+    ("unverified", "Joins waiting to verify"),
+    ("ban", "Ban someone"),
+    ("mute", "Mute someone"),
+    ("kick", "Remove someone"),
+    ("warn", "Warn someone"),
+    ("lock", "Lock the chat"),
+    ("unlock", "Open the chat"),
+    ("flood", "Anti-flood settings"),
+    ("pin", "Pin a message"),
+    ("report", "Ban a sticker pack"),
+    ("packs", "Banned sticker packs"),
+    ("strikes", "Sticker warnings"),
+    ("tag", "Set a member tag"),
+    ("joins", "Recent joins"),
+    ("tagall", "Ping everyone"),
+    ("setlog", "Link a log chat"),
+    ("makeadmin", "Grant admin through me"),
 ]
+
+
+def _bot_commands(items: list[tuple[str, str]]) -> list[BotCommand]:
+    return [BotCommand(cmd_name(name), desc) for name, desc in items]
 
 
 async def on_startup(app: Application) -> None:
-    await app.bot.set_my_commands(_MEMBER_COMMANDS, scope=BotCommandScopeDefault())
-    await app.bot.set_my_commands(_MEMBER_COMMANDS, scope=BotCommandScopeAllGroupChats())
-    await app.bot.set_my_commands(_STAFF_COMMANDS, scope=BotCommandScopeAllChatAdministrators())
+    await app.bot.set_my_commands(
+        [BotCommand("start", "Start / add to a group"), BotCommand("help", "Help in private chat")],
+        scope=BotCommandScopeDefault(),
+    )
+    await app.bot.set_my_commands(_bot_commands(_MEMBER_COMMANDS), scope=BotCommandScopeAllGroupChats())
+    await app.bot.set_my_commands(
+        _bot_commands(_STAFF_COMMANDS),
+        scope=BotCommandScopeAllChatAdministrators(),
+    )
+    log.info("Group commands use %s (e.g. %s)", COMMAND_PREFIX, cmd("help"))
+    await schedule_pending_jobs(app)
+    app.create_task(daily_zombies_loop(app))
 
 
 def main() -> None:
@@ -105,57 +192,108 @@ def main() -> None:
     db.init()
     app = Application.builder().token(BOT_TOKEN).post_init(on_startup).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", cmd_help))
+    add_cmd(app, "help", cmd_help, private_slash=True)
     app.add_handler(CallbackQueryHandler(on_help_callback, pattern=r"^help:"))
     app.add_handler(CallbackQueryHandler(on_whisper_callback, pattern=r"^w:"))
     app.add_handler(CallbackQueryHandler(on_tagall_callback, pattern=r"^ta:"))
-    app.add_handler(CommandHandler("whisper", cmd_whisper))
-    app.add_handler(CommandHandler("lock", cmd_lock))
-    app.add_handler(CommandHandler("unlock", cmd_unlock))
-    app.add_handler(CommandHandler("flood", cmd_flood))
-    app.add_handler(CommandHandler("floodmute", cmd_floodmute))
-    app.add_handler(CommandHandler("scold", cmd_scold))
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("who", cmd_stats))
-    app.add_handler(CommandHandler("user", cmd_stats))
-    app.add_handler(CommandHandler("tag", cmd_tag))
-    app.add_handler(CommandHandler("nick", cmd_tag))
-    app.add_handler(CommandHandler("tagall", cmd_tagall))
-    app.add_handler(CommandHandler("notag", cmd_notag))
-    app.add_handler(CommandHandler("tagme", cmd_tagme))
-    app.add_handler(CommandHandler("joins", cmd_joins))
-    app.add_handler(CommandHandler("purgejoins", cmd_purgejoins))
-    app.add_handler(CommandHandler("raidmode", cmd_raidmode))
-    app.add_handler(CommandHandler("approve", cmd_approve))
-    app.add_handler(CommandHandler("unapprove", cmd_unapprove))
-    app.add_handler(CommandHandler("trust", cmd_trust))
-    app.add_handler(CommandHandler("untrust", cmd_untrust))
-    app.add_handler(CommandHandler("trusted", cmd_trusted))
-    app.add_handler(CommandHandler("addowner", cmd_addowner))
-    app.add_handler(CommandHandler("removeowner", cmd_removeowner))
-    app.add_handler(CommandHandler("owners", cmd_owners))
-    app.add_handler(CommandHandler("report", cmd_report))
-    app.add_handler(CommandHandler("blockpack", cmd_blockpack))
-    app.add_handler(CommandHandler("allowpack", cmd_allowpack))
-    app.add_handler(CommandHandler("allowsticker", cmd_allowsticker))
-    app.add_handler(CommandHandler("setplaceholder", cmd_setplaceholder))
-    app.add_handler(CommandHandler("clearplaceholder", cmd_clearplaceholder))
-    app.add_handler(CommandHandler("setlog", cmd_setlog))
-    app.add_handler(CommandHandler("unsetlog", cmd_unsetlog))
-    app.add_handler(CommandHandler("setkickmsg", cmd_setkickmsg))
-    app.add_handler(CommandHandler("kickmsg", cmd_kickmsg))
-    app.add_handler(CommandHandler("clearkickmsg", cmd_clearkickmsg))
-    app.add_handler(CommandHandler("forgive", cmd_forgive))
-    app.add_handler(CommandHandler("strikes", cmd_strikes))
-    app.add_handler(CommandHandler("makeadmin", cmd_makeadmin))
-    app.add_handler(CommandHandler("dropadmin", cmd_dropadmin))
-    app.add_handler(CommandHandler("dropadmins", cmd_dropadmins))
-    app.add_handler(CommandHandler("kick", cmd_kick))
+    app.add_handler(CallbackQueryHandler(on_packs_callback, pattern=r"^pk:"))
+    app.add_handler(CallbackQueryHandler(on_verify_callback, pattern=r"^vf:"))
+    app.add_handler(CallbackQueryHandler(on_game_callback, pattern=r"^gm:"))
+    add_cmd(app, "whisper", cmd_whisper)
+    add_cmd(app, "lock", cmd_lock)
+    add_cmd(app, "unlock", cmd_unlock)
+    add_cmd(app, "flood", cmd_flood)
+    add_cmd(app, "floodmute", cmd_floodmute)
+    add_cmd(app, "scold", cmd_scold)
+    add_cmd(app, ["gamehelp", "games", "game_help"], cmd_gamehelp)
+    add_cmd(app, "daily", cmd_daily)
+    add_cmd(app, ["top", "leaderboard"], cmd_top)
+    add_cmd(app, ["balance", "coins"], cmd_balance)
+    add_cmd(app, "toss", cmd_toss)
+    add_cmd(app, "dice", cmd_dice)
+    add_cmd(app, ["lucky7", "7up"], cmd_lucky7)
+    add_cmd(app, ["rps", "sps"], cmd_rps)
+    add_cmd(app, "cricket", cmd_cricket)
+    add_cmd(app, ["stats", "who", "user"], cmd_stats)
+    add_cmd(app, ["tag", "nick"], cmd_tag)
+    add_cmd(app, "tagall", cmd_tagall)
+    add_cmd(app, "notag", cmd_notag)
+    add_cmd(app, "tagme", cmd_tagme)
+    add_cmd(app, "joins", cmd_joins)
+    add_cmd(app, "purgejoins", cmd_purgejoins)
+    add_cmd(app, "raidmode", cmd_raidmode)
+    add_cmd(app, "approve", cmd_approve)
+    add_cmd(app, "unapprove", cmd_unapprove)
+    add_cmd(app, "trust", cmd_trust)
+    add_cmd(app, "untrust", cmd_untrust)
+    add_cmd(app, "trusted", cmd_trusted)
+    add_cmd(app, "addowner", cmd_addowner)
+    add_cmd(app, "removeowner", cmd_removeowner)
+    add_cmd(app, "owners", cmd_owners)
+    add_cmd(app, ["report", "blockpack"], cmd_report)
+    add_cmd(app, ["packs", "bannedpacks", "unbanpack"], cmd_packs)
+    add_cmd(app, "allowpack", cmd_allowpack)
+    add_cmd(app, "allowsticker", cmd_allowsticker)
+    add_cmd(app, "setplaceholder", cmd_setplaceholder)
+    add_cmd(app, "clearplaceholder", cmd_clearplaceholder)
+    add_cmd(app, "setlog", cmd_setlog)
+    add_cmd(app, "unsetlog", cmd_unsetlog)
+    add_cmd(app, "setkickmsg", cmd_setkickmsg)
+    add_cmd(app, "kickmsg", cmd_kickmsg)
+    add_cmd(app, "clearkickmsg", cmd_clearkickmsg)
+    add_cmd(app, "forgive", cmd_forgive)
+    add_cmd(app, "strikes", cmd_strikes)
+    add_cmd(app, "makeadmin", cmd_makeadmin)
+    add_cmd(app, "dropadmin", cmd_dropadmin)
+    add_cmd(app, "dropadmins", cmd_dropadmins)
+    add_cmd(app, "kick", cmd_kick)
+    add_cmd(app, ["welcome", "setwelcome"], cmd_welcome)
+    add_cmd(app, ["goodbye", "setgoodbye"], cmd_goodbye)
+    add_cmd(app, ["verify", "captcha"], cmd_verify)
+    add_cmd(app, ["unverified", "verifyqueue"], cmd_unverified)
+    add_cmd(app, "cleanservice", cmd_cleanservice)
+    add_cmd(app, "rules", cmd_rules)
+    add_cmd(app, "setrules", cmd_setrules)
+    add_cmd(app, "clearrules", cmd_clearrules)
+    add_cmd(app, "id", cmd_id)
+    add_cmd(app, "admins", cmd_admins)
+    add_cmd(app, ["staff", "reportuser"], cmd_staff)
+    add_cmd(app, "ban", cmd_ban)
+    add_cmd(app, "unban", cmd_unban)
+    add_cmd(app, ["mute", "tmute"], cmd_mute)
+    add_cmd(app, "unmute", cmd_unmute)
+    add_cmd(app, "pin", cmd_pin)
+    add_cmd(app, "unpin", cmd_unpin)
+    add_cmd(app, "unpinall", cmd_unpinall)
+    add_cmd(app, ["del", "delete"], cmd_del)
+    add_cmd(app, "purge", cmd_purge)
+    add_cmd(app, "warn", cmd_warn)
+    add_cmd(app, "warns", cmd_warns)
+    add_cmd(app, ["resetwarns", "rmwarns"], cmd_resetwarns)
+    add_cmd(app, "warnlimit", cmd_warnlimit)
+    add_cmd(app, "zombies", cmd_zombies)
+    add_cmd(app, ["save", "savenote"], cmd_save)
+    add_cmd(app, "get", cmd_get)
+    add_cmd(app, ["clear", "clearnote"], cmd_clear)
+    add_cmd(app, "notes", cmd_notes)
+    add_cmd(app, "filter", cmd_filter)
+    add_cmd(app, "stop", cmd_stop)
+    add_cmd(app, "filters", cmd_filters)
+    add_cmd(app, ["blacklist", "bl"], cmd_blacklist)
+    add_cmd(app, ["unblacklist", "unbl"], cmd_unblacklist)
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_members))
+    app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left_service))
     app.add_handler(MessageHandler(filters.StatusUpdate.CHAT_SHARED, on_chat_shared))
     app.add_handler(MessageHandler(filters.ALL & ~filters.StatusUpdate.ALL, on_seen), group=-1)
     app.add_handler(MessageHandler(filters.Sticker.ALL, on_sticker))
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
+            on_triggers,
+        ),
+        group=0,
+    )
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_calc),
         group=1,

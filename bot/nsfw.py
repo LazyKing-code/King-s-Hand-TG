@@ -53,6 +53,8 @@ async def is_nsfw_sticker(sticker: Sticker, chat_id: int, bot) -> tuple[bool, st
 
     if db.sticker_allowed(unique):
         return False, "whitelisted sticker"
+    if db.sticker_banned(chat_id, unique):
+        return True, "banned sticker"
     if db.pack_allowed(chat_id, set_name):
         return False, "whitelisted pack"
     if db.pack_banned(chat_id, set_name):
@@ -66,6 +68,8 @@ async def is_nsfw_sticker(sticker: Sticker, chat_id: int, bot) -> tuple[bool, st
     if cached is not None:
         if cached and set_name:
             db.ban_pack(chat_id, set_name)
+        elif cached:
+            db.ban_sticker(chat_id, unique)
         return cached, "cached scan"
 
     nsfw = await _scan_sticker_image(sticker, bot)
@@ -74,6 +78,7 @@ async def is_nsfw_sticker(sticker: Sticker, chat_id: int, bot) -> tuple[bool, st
         db.ban_pack(chat_id, set_name)
         return True, f"image scan; pack {set_name} auto-banned"
     if nsfw:
+        db.ban_sticker(chat_id, unique)
         return True, "image scan"
     return False, "clean"
 

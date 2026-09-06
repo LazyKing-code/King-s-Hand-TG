@@ -14,6 +14,8 @@ from telegram import (
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
+from bot.commands import cmd
+
 REQ_GROUP = 1
 REQ_CHANNEL = 2
 
@@ -117,5 +119,5 @@ async def on_chat_shared(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     kind = "channel" if shared.request_id == REQ_CHANNEL else "group"
     await message.reply_html(
         f"I'm in the {kind} <b>{title}</b>.\n"
-        "Send <code>/help</code> there. If I still cannot delete messages, make me admin again."
+        f"Send <code>{cmd('help')}</code> there. If I still cannot delete messages, make me admin again."
     )

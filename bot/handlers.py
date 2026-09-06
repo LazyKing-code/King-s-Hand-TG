@@ -4,11 +4,13 @@ import logging
 
 from html import escape
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from bot import db
+from bot.commands import cmd, cmd_name
 from bot.config import OWNER_IDS
 from bot.invite import ADD_TEXT, bot_username, pick_keyboard, url_buttons
 from bot.moderation import (
@@ -19,10 +21,12 @@ from bot.moderation import (
     demote_all_admins,
     format_user,
     forwarded_chat,
+    is_group_admin,
     is_immune,
     is_owner,
     kick,
     mention,
+    promote_limited,
     require_group_admin,
     require_group_owner,
     resolve_target,
@@ -58,7 +62,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not chat or chat.type != ChatType.PRIVATE:
         await update.effective_message.reply_html(
             "<b>King's Hand</b>\n"
-            "Send <code>/help</code> to see what you can use here."
+            f"Send <code>{cmd('help')}</code> to see what you can use here."
             + extra
         )
         return
@@ -67,7 +71,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "<b>King's Hand</b>\n"
         "I keep the group in order — stickers, spam, whispers, and the occasional scolding.\n\n"
         f"{ADD_TEXT}\n\n"
-        "Then send <code>/help</code> in the group to see commands for your role."
+        f"Then send <code>{cmd('help')}</code> in the group to see commands for your role."
         + extra,
         reply_markup=url_buttons(username),
         disable_web_page_preview=True,
@@ -174,7 +178,7 @@ async def cmd_untrust(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = update.effective_chat.id
     if target.id in OWNER_IDS or db.is_extra_owner(chat_id, target.id):
         await update.effective_message.reply_html(
-            f"{mention(target)} is an owner, so they stay immune. Use /removeowner first."
+            f"{mention(target)} is an owner, so they stay immune. Use {cmd('removeowner')} first."
         )
         return
     db.set_trusted(chat_id, target.id, False)
@@ -190,7 +194,7 @@ async def cmd_trusted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     ids = db.list_trusted(chat_id)
     if not ids:
         await update.effective_message.reply_text(
-            "No extra trusted users yet. Reply /trust to someone you do not want punished."
+            f"No extra trusted users yet. Reply {cmd('trust')} to someone you do not want punished."
         )
         return
     lines = [await format_user(context, chat_id, uid) for uid in ids]
@@ -236,7 +240,7 @@ async def cmd_removeowner(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     db.set_extra_owner(update.effective_chat.id, target.id, False)
     await update.effective_message.reply_html(
         f"{mention(target)} is no longer an extra owner. "
-        "They stay on /trusted until you /untrust them."
+        f"They stay on {cmd('trusted')} until you {cmd('untrust')} them."
     )
 
 
@@ -253,7 +257,7 @@ async def cmd_owners(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     extra = db.list_extra_owners(chat_id)
     if extra:
         for uid in extra:
-            lines.append(f"• {await format_user(context, chat_id, uid)} — /addowner")
+            lines.append(f"• {await format_user(context, chat_id, uid)} — {cmd('addowner')}")
     lines.append("The Telegram group creator is always an owner.")
     await update.effective_message.reply_html("\n".join(lines))
 
@@ -263,11 +267,14 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     reply = update.effective_message.reply_to_message
     if not reply or not reply.sticker:
-        await update.effective_message.reply_text("Reply to a sticker with /report and I will ban that pack.")
+        await update.effective_message.reply_text(
+            f"Reply to a sticker with {cmd('report')} and I will ban that pack."
+        )
         return
     set_name = reply.sticker.set_name
     if not set_name:
         db.cache_set(reply.sticker.file_unique_id, True, None)
+        db.ban_sticker(update.effective_chat.id, reply.sticker.file_unique_id)
         try:
             await reply.delete()
         except Exception:
@@ -288,25 +295,292 @@ async def cmd_blockpack(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_allowpack(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await require_group_owner(update):
+    if not await require_group_admin(update):
         return
-    reply = update.effective_message.reply_to_message
-    if not reply or not reply.sticker or not reply.sticker.set_name:
-        await update.effective_message.reply_text("Reply to a sticker with /allowpack.")
+    chat_id = update.effective_chat.id
+    msg = update.effective_message
+    name = " ".join(context.args or []).strip()
+    reply = msg.reply_to_message
+    if reply and reply.sticker and reply.sticker.set_name:
+        name = reply.sticker.set_name
+    if not name:
+        await _send_packs_list(msg, chat_id)
         return
-    db.allow_pack(update.effective_chat.id, reply.sticker.set_name)
-    await update.effective_message.reply_text(f"Allowed pack: {reply.sticker.set_name}")
+    banned = db.list_banned_packs(chat_id)
+    match = _find_named(banned, name) or name
+    db.allow_pack(chat_id, match)
+    await msg.reply_html(
+        f"Allowed pack <code>{escape(match)}</code>. "
+        "You do not need the original sticker — it is already deleted after a report."
+    )
 
 
 async def cmd_allowsticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await require_group_owner(update):
+    if not await require_group_admin(update):
         return
-    reply = update.effective_message.reply_to_message
-    if not reply or not reply.sticker:
-        await update.effective_message.reply_text("Reply to a sticker with /allowsticker.")
+    msg = update.effective_message
+    reply = msg.reply_to_message
+    if reply and reply.sticker:
+        db.allow_sticker(reply.sticker.file_unique_id)
+        db.unban_sticker(update.effective_chat.id, reply.sticker.file_unique_id)
+        await msg.reply_text("That sticker is whitelisted.")
         return
-    db.allow_sticker(reply.sticker.file_unique_id)
-    await update.effective_message.reply_text("That sticker is whitelisted.")
+    rest = " ".join(context.args or []).strip().lower()
+    stickers = db.list_banned_stickers(update.effective_chat.id)
+    if rest.startswith("s") and rest[1:].isdigit():
+        target = _pick_index(stickers, rest[1:])
+        if not target:
+            await msg.reply_text(
+                f"No banned sticker with that number. Send {cmd('packs')} first."
+            )
+            return
+        db.allow_sticker(target)
+        db.unban_sticker(update.effective_chat.id, target)
+        await msg.reply_text("Removed that sticker from the ban list.")
+        return
+    await _send_packs_list(msg, update.effective_chat.id)
+
+
+def _find_named(items: list[str], raw: str) -> str | None:
+    needle = raw.strip()
+    if not needle:
+        return None
+    for item in items:
+        if item.lower() == needle.lower():
+            return item
+    return None
+
+
+def _pick_index(items: list[str], raw: str) -> str | None:
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= len(items):
+            return items[idx - 1]
+        return None
+    return _find_named(items, raw)
+
+
+async def cmd_packs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group_admin(update):
+        return
+    chat_id = update.effective_chat.id
+    msg = update.effective_message
+    args = list(context.args or [])
+    invoked = (msg.text or "").split()[0].lstrip("/").split("@")[0].lower()
+    if invoked == cmd_name("unbanpack") and args:
+        args = ["unban", *args]
+    banned = db.list_banned_packs(chat_id)
+    allowed = db.list_allowed_packs(chat_id)
+    stickers = db.list_banned_stickers(chat_id)
+
+    if args:
+        action = args[0].lower()
+        rest = " ".join(args[1:]).strip()
+        if action in {"unban", "remove", "del", "allow"}:
+            if not rest:
+                await msg.reply_text(
+                    f"Which pack? Example: {cmd('packs')} unban 2\n"
+                    f"or {cmd('packs')} unban PackName"
+                )
+                return
+            if rest.lower().startswith("s") and rest[1:].isdigit():
+                target = _pick_index(stickers, rest[1:])
+                if not target:
+                    await msg.reply_text("No banned sticker with that number. Send the list again.")
+                    return
+                db.allow_sticker(target)
+                db.unban_sticker(chat_id, target)
+                await msg.reply_text("Removed that sticker from the ban list (whitelisted).")
+                return
+            target = _pick_index(banned, rest)
+            if not target:
+                await msg.reply_text("That pack is not on the banned list. Check the number or name.")
+                return
+            db.allow_pack(chat_id, target)
+            await msg.reply_html(
+                f"Removed <code>{escape(target)}</code> from the banned list "
+                "and whitelisted it so it is not auto-banned again."
+            )
+            return
+        if action in {"unallow", "unwhitelist"}:
+            if not rest:
+                await msg.reply_text(f"Example: {cmd('packs')} unallow 1")
+                return
+            target = _pick_index(allowed, rest)
+            if not target:
+                await msg.reply_text("That pack is not on the whitelist.")
+                return
+            db.unallow_pack(chat_id, target)
+            await msg.reply_html(f"Removed <code>{escape(target)}</code> from the whitelist.")
+            return
+
+    if not banned and not allowed and not stickers:
+        await msg.reply_text(
+            "No banned packs or stickers in this group yet.\n"
+            f"Reply to a sticker with {cmd('report')} to ban its pack."
+        )
+        return
+    await _send_packs_list(msg, chat_id)
+
+
+def _packs_markup(
+    banned: list[str],
+    stickers: list[str],
+    allowed: list[str],
+) -> InlineKeyboardMarkup | None:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for i, name in enumerate(banned[:16], 1):
+        label = name if len(name) <= 28 else name[:25] + "…"
+        row.append(InlineKeyboardButton(f"Allow {i}: {label}", callback_data=f"pk:b:{i}"))
+        if len(row) == 1:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    row = []
+    for i, _uid in enumerate(stickers[:8], 1):
+        row.append(InlineKeyboardButton(f"Allow s{i}", callback_data=f"pk:s:{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    row = []
+    for i, name in enumerate(allowed[:8], 1):
+        label = name if len(name) <= 22 else name[:19] + "…"
+        row.append(InlineKeyboardButton(f"Drop {i}: {label}", callback_data=f"pk:a:{i}"))
+        if len(row) == 1:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if not rows:
+        return None
+    return InlineKeyboardMarkup(rows)
+
+
+def _packs_text(banned: list[str], stickers: list[str], allowed: list[str]) -> str:
+    lines = [
+        "<b>Banned packs</b>",
+        "The sticker is deleted after a report. Use the buttons, or the number — no reply needed.",
+    ]
+    if banned:
+        for i, name in enumerate(banned, 1):
+            link = f"https://t.me/addstickers/{name}"
+            lines.append(f'{i}. <a href="{link}">{escape(name)}</a>')
+        lines.append(
+            f"Or: <code>{cmd('packs')} unban 2</code> · "
+            f"<code>{cmd('allowpack')} PackName</code>"
+        )
+    else:
+        lines.append("None")
+
+    lines.append("")
+    lines.append("<b>Banned stickers</b> (no pack)")
+    if stickers:
+        for i, uid in enumerate(stickers, 1):
+            shown = escape(uid if len(uid) <= 24 else uid[:20] + "…")
+            lines.append(f"s{i}. <code>{shown}</code>")
+        lines.append(f"Tap <b>Allow s1</b> or <code>{cmd('packs')} unban s1</code>")
+    else:
+        lines.append("None")
+
+    lines.append("")
+    lines.append("<b>Whitelisted packs</b>")
+    if allowed:
+        for i, name in enumerate(allowed, 1):
+            lines.append(f"{i}. <code>{escape(name)}</code>")
+        lines.append(f"Drop whitelist: tap the button or <code>{cmd('packs')} unallow 1</code>")
+    else:
+        lines.append("None")
+    return "\n".join(lines)
+
+
+async def _send_packs_list(msg, chat_id: int) -> None:
+    banned = db.list_banned_packs(chat_id)
+    allowed = db.list_allowed_packs(chat_id)
+    stickers = db.list_banned_stickers(chat_id)
+    if not banned and not allowed and not stickers:
+        await msg.reply_text(
+            "No banned packs or stickers in this group yet.\n"
+            f"Reply to a sticker with {cmd('report')} to ban its pack."
+        )
+        return
+    text = _packs_text(banned, stickers, allowed)
+    markup = _packs_markup(banned, stickers, allowed)
+    if len(text) > 3500:
+        await msg.reply_html(text[:3500], disable_web_page_preview=True, reply_markup=markup)
+        return
+    await msg.reply_html(text, disable_web_page_preview=True, reply_markup=markup)
+
+
+async def on_packs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data or not query.data.startswith("pk:"):
+        return
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        await query.answer()
+        return
+    if not await is_group_admin(update, user.id):
+        await query.answer("Only admins can change this list.", show_alert=True)
+        return
+    parts = query.data.split(":")
+    if len(parts) != 3:
+        await query.answer()
+        return
+    _, kind, raw = parts
+    chat_id = chat.id
+    banned = db.list_banned_packs(chat_id)
+    allowed = db.list_allowed_packs(chat_id)
+    stickers = db.list_banned_stickers(chat_id)
+    if kind == "b":
+        target = _pick_index(banned, raw)
+        if not target:
+            await query.answer("That pack is already gone. Refresh the list.", show_alert=True)
+        else:
+            db.allow_pack(chat_id, target)
+            await query.answer(f"Allowed {target}")
+    elif kind == "s":
+        target = _pick_index(stickers, raw)
+        if not target:
+            await query.answer("That sticker is already gone.", show_alert=True)
+        else:
+            db.allow_sticker(target)
+            db.unban_sticker(chat_id, target)
+            await query.answer("Allowed that sticker")
+    elif kind == "a":
+        target = _pick_index(allowed, raw)
+        if not target:
+            await query.answer("Already removed.", show_alert=True)
+        else:
+            db.unallow_pack(chat_id, target)
+            await query.answer(f"Removed whitelist for {target}")
+    else:
+        await query.answer()
+        return
+    banned = db.list_banned_packs(chat_id)
+    allowed = db.list_allowed_packs(chat_id)
+    stickers = db.list_banned_stickers(chat_id)
+    if not banned and not allowed and not stickers:
+        try:
+            await query.edit_message_text("List is empty. Nothing banned or whitelisted.")
+        except TelegramError:
+            pass
+        return
+    text = _packs_text(banned, stickers, allowed)
+    markup = _packs_markup(banned, stickers, allowed)
+    try:
+        await query.edit_message_text(
+            text[:3500],
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=markup,
+        )
+    except TelegramError:
+        pass
 
 
 async def cmd_setplaceholder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -370,36 +644,30 @@ async def cmd_makeadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     target = await resolve_target(update, context)
     if not target:
         await update.effective_message.reply_text(
-            "Who should I make admin? Reply to them first. "
-            "Drop them manually if they are already admin "
-            "(the bot can only later demote people it made admin)."
+            "Who should I make admin? Reply to one of their messages, "
+            f"or send {cmd('makeadmin')} @username.\n"
+            "If they are already admin, drop them in Telegram first "
+            "(I can only change people I promoted)."
         )
         return
+    if target.is_bot:
+        await update.effective_message.reply_text("I cannot promote a bot this way.")
+        return
     try:
-        await context.bot.promote_chat_member(
-            chat_id=update.effective_chat.id,
-            user_id=target.id,
-            is_anonymous=False,
-            can_manage_chat=True,
-            can_delete_messages=True,
-            can_manage_video_chats=True,
-            can_restrict_members=False,
-            can_promote_members=False,
-            can_change_info=False,
-            can_invite_users=True,
-            can_pin_messages=True,
-            can_manage_topics=False,
-        )
+        await promote_limited(context, update.effective_chat, target.id)
         db.reset_strikes(update.effective_chat.id, target.id)
         await update.effective_message.reply_html(
             f"{mention(target)} is now admin via this bot.\n"
             "They cannot add/remove admins or kick the bot. "
             "If they hit 3 sticker warnings, I can drop them."
         )
+    except (TelegramError, ValueError) as exc:
+        log.exception("makeadmin failed")
+        await update.effective_message.reply_text(getattr(exc, "message", None) or str(exc))
     except Exception:
         log.exception("makeadmin failed")
         await update.effective_message.reply_text(
-            "Failed. Drop them manually first, give me Add admins, then try /makeadmin again."
+            "Failed. Drop them in Telegram first, give me Add admins, then try again."
         )
 
 
@@ -426,20 +694,20 @@ async def cmd_dropadmins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if "confirm" not in args:
         await update.effective_message.reply_text(
             "This drops every admin I can, except the group creator and owners.\n"
-            "Then use /makeadmin on the people who should be admin again.\n\n"
-            "Send /dropadmins confirm to run it."
+            f"Then use {cmd('makeadmin')} on the people who should be admin again.\n\n"
+            f"Send {cmd('dropadmins')} confirm to run it."
         )
         return
     ok_count, failed = await demote_all_admins(context, update.effective_chat.id)
     if failed:
         await update.effective_message.reply_html(
             f"Dropped {ok_count} admin(s).\n"
-            "Could not drop (make them admin with /makeadmin next time):\n"
+            f"Could not drop (make them admin with {cmd('makeadmin')} next time):\n"
             + "\n".join(f"• {name}" for name in failed)
         )
         return
     await update.effective_message.reply_text(
-        f"Dropped {ok_count} admin(s). Reply /makeadmin to each person I should make admin."
+        f"Dropped {ok_count} admin(s). Reply {cmd('makeadmin')} to each person I should make admin."
         if ok_count
         else "No admins to drop (or I cannot drop the ones that are left)."
     )
@@ -493,8 +761,8 @@ async def cmd_setlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         _PENDING_LOG[user.id] = chat.id
         await msg.reply_html(
             "This chat is the <b>log inbox</b>. It can receive from more than one group.\n"
-            "Open each <b>main</b> group and send <code>/setlog</code> there.\n"
-            "To use a different inbox later, send <code>/setlog here</code> in that other log chat first."
+            f"Open each <b>main</b> group and send <code>{cmd('setlog')}</code> there.\n"
+            f"To use a different inbox later, send <code>{cmd('setlog')} here</code> in that other log chat first."
         )
         return
 
@@ -533,11 +801,13 @@ async def cmd_setlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await msg.reply_html(
             f"{current_txt}{pending_txt}\n\n"
             "Each main group has its own link. One log chat can take many groups.\n"
-            "1. In the <b>log</b> chat send <code>/setlog here</code>\n"
-            "2. In a <b>main</b> group send <code>/setlog</code>\n"
+            f"1. In the <b>log</b> chat send <code>{cmd('setlog')} here</code>\n"
+            f"2. In a <b>main</b> group send <code>{cmd('setlog')}</code>\n"
             "3. Repeat step 2 in every other main group that should use that same log.\n"
-            "For a second log inbox, <code>/setlog here</code> there, then <code>/setlog</code> in the mains that should use it.\n"
-            "<code>/unsetlog</code> only unlinks <b>this</b> group. <code>/setlog done</code> clears the pending inbox."
+            f"For a second log inbox, <code>{cmd('setlog')} here</code> there, then "
+            f"<code>{cmd('setlog')}</code> in the mains that should use it.\n"
+            f"<code>{cmd('unsetlog')}</code> only unlinks <b>this</b> group. "
+            f"<code>{cmd('setlog')} done</code> clears the pending inbox."
         )
         return
     if target.id == chat.id:
@@ -555,15 +825,15 @@ async def cmd_setlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         log.exception("setlog test send failed")
         await msg.reply_text(
             "I cannot post there. Add me as admin with Post messages (channel) "
-            "or as a member who can send messages (group), then /setlog again."
+            f"or as a member who can send messages (group), then {cmd('setlog')} again."
         )
         return
     db.set_log_chat(chat.id, target.id)
     dest = escape(target.title or str(target.id))
     await msg.reply_html(
         f"This group now logs to <b>{dest}</b>.\n"
-        "Other groups are unchanged. Send <code>/setlog</code> in another main group "
-        "to point that one at the same inbox, or <code>/setlog here</code> in a different log chat first."
+        f"Other groups are unchanged. Send <code>{cmd('setlog')}</code> in another main group "
+        f"to point that one at the same inbox, or <code>{cmd('setlog')} here</code> in a different log chat first."
     )
 
 
@@ -586,7 +856,7 @@ async def cmd_setkickmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not text:
         current = db.get_kick_message(update.effective_chat.id) or DEFAULT_KICK_MSG
         await update.effective_message.reply_text(
-            "Send /setkickmsg with your text, or reply to a message.\n\n"
+            f"Send {cmd('setkickmsg')} with your text, or reply to a message.\n\n"
             "Placeholders:\n"
             "{user} {name} {username} {id} {reason} {chat}\n\n"
             f"Current:\n{current}"

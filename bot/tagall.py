@@ -12,6 +12,7 @@ from telegram.error import RetryAfter, TelegramError
 from telegram.ext import ContextTypes
 
 from bot import db
+from bot.commands import cmd
 from bot.config import OWNER_IDS
 from bot.moderation import require_group
 
@@ -74,7 +75,7 @@ async def cmd_notag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_group(update):
         return
     db.set_tagall_optout(update.effective_chat.id, update.effective_user.id, True)
-    await update.effective_message.reply_text("You will be skipped on /tagall.")
+    await update.effective_message.reply_text(f"You will be skipped on {cmd('tagall')}.")
 
 
 async def cmd_tagme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -84,7 +85,7 @@ async def cmd_tagme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     db.touch_member(chat_id, user_id)
     db.set_tagall_optout(chat_id, user_id, False)
-    await update.effective_message.reply_text("You will be included in /tagall.")
+    await update.effective_message.reply_text(f"You will be included in {cmd('tagall')}.")
 
 
 async def on_tagall_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -102,11 +103,11 @@ async def on_tagall_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if query.data == "ta:in":
         db.touch_member(chat.id, user.id)
         db.set_tagall_optout(chat.id, user.id, False)
-        await query.answer("You will be included in /tagall.")
+        await query.answer(f"You will be included in {cmd('tagall')}.")
         return
     if query.data == "ta:out":
         db.set_tagall_optout(chat.id, user.id, True)
-        await query.answer("You will be skipped on /tagall.")
+        await query.answer(f"You will be skipped on {cmd('tagall')}.")
         return
     await query.answer()
 
@@ -161,7 +162,7 @@ async def cmd_tagall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         for user_id in ids:
             db.touch_member(chat_id, user_id)
         await update.effective_message.reply_text(
-            f"Saved {len(ids)} people for /tagall. They will be pinged even if they never spoke."
+            f"Saved {len(ids)} people for {cmd('tagall')}. They will be pinged even if they never spoke."
         )
         return
 
@@ -186,7 +187,7 @@ async def cmd_tagall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not targets:
         await update.effective_message.reply_text(
             "Nobody is on the list yet. Telegram does not give bots a full member list.\n"
-            "Pin /tagall invite so silent members can tap in, or /tagall add with their ids."
+            f"Pin {cmd('tagall')} invite so silent members can tap in, or {cmd('tagall')} add with their ids."
         )
         return
 
