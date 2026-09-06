@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import time
 from html import escape
 
 from telegram import ChatMember, Message, Update, User
 from telegram.constants import ChatType
+from telegram.error import RetryAfter
 from telegram.ext import ContextTypes
 
 from bot import db
@@ -335,36 +337,62 @@ async def demote_all_admins(
     return ok_count, failed
 
 
+_PLACEHOLDER_GAP = 18.0
+_last_placeholder: dict[int, float] = {}
+
+
 async def send_placeholder(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
-    custom = db.get_placeholder(chat_id)
-    if custom:
-        try:
-            await context.bot.send_sticker(chat_id, custom)
-            return
-        except Exception:
-            log.exception("Custom placeholder failed for chat %s", chat_id)
-
-    cached = db.kv_get("default_placeholder_file_id")
-    if cached:
-        try:
-            await context.bot.send_sticker(chat_id, cached)
-            return
-        except Exception:
-            log.exception("Cached default placeholder failed")
-            db.kv_set("default_placeholder_file_id", None)
-
-    path = ensure_placeholder_file()
-    try:
-        msg = await context.bot.send_sticker(chat_id, path)
-        if msg.sticker and msg.sticker.file_id:
-            db.kv_set("default_placeholder_file_id", msg.sticker.file_id)
+    now = time.time()
+    last = _last_placeholder.get(chat_id, 0.0)
+    if now - last < _PLACEHOLDER_GAP:
         return
-    except Exception:
-        log.exception("Default placeholder sticker failed")
+    _last_placeholder[chat_id] = now
+
+    async def _send() -> None:
+        custom = db.get_placeholder(chat_id)
+        if custom:
+            try:
+                await context.bot.send_sticker(chat_id, custom)
+                return
+            except RetryAfter as exc:
+                _last_placeholder[chat_id] = time.time() + float(exc.retry_after)
+                log.warning("Placeholder delayed %ss in %s", exc.retry_after, chat_id)
+                return
+            except Exception:
+                log.exception("Custom placeholder failed for chat %s", chat_id)
+
+        cached = db.kv_get("default_placeholder_file_id")
+        if cached:
+            try:
+                await context.bot.send_sticker(chat_id, cached)
+                return
+            except RetryAfter as exc:
+                _last_placeholder[chat_id] = time.time() + float(exc.retry_after)
+                return
+            except Exception:
+                log.exception("Cached default placeholder failed")
+                db.kv_set("default_placeholder_file_id", None)
+
+        path = ensure_placeholder_file()
+        try:
+            msg = await context.bot.send_sticker(chat_id, path)
+            if msg.sticker and msg.sticker.file_id:
+                db.kv_set("default_placeholder_file_id", msg.sticker.file_id)
+            return
+        except RetryAfter as exc:
+            _last_placeholder[chat_id] = time.time() + float(exc.retry_after)
+            return
+        except Exception:
+            log.exception("Default placeholder sticker failed")
+        try:
+            await context.bot.send_photo(chat_id, path)
+        except Exception:
+            log.exception("Placeholder photo fallback failed")
+
     try:
-        await context.bot.send_photo(chat_id, path)
+        await _send()
     except Exception:
-        log.exception("Placeholder photo fallback failed")
+        log.exception("Placeholder failed")
 
 
 async def apply_punishment(
@@ -388,8 +416,8 @@ async def apply_punishment(
         await notify(
             context,
             chat_id,
-            f"{who} was on {cmd('approve')}. Approval removed for a banned sticker ({why}).\n"
-            "Next time this happens, they will be kicked.",
+            f"{who} was on {cmd('approve')}. I removed that sticker ({why}).\n"
+            "Approval is gone. Next banned sticker will get them kicked.",
             event="Unapproved",
         )
         return
@@ -417,7 +445,7 @@ async def apply_punishment(
             await notify(
                 context,
                 chat_id,
-                f"{who} warning {strikes}/3: banned sticker removed ({why}).\n"
+                f"{who}, I removed that sticker ({why}). Warning {strikes}/3.\n"
                 "At 3 warnings you will be demoted.",
                 event="Warning",
             )
@@ -449,7 +477,7 @@ async def apply_punishment(
         await notify(
             context,
             chat_id,
-            f"{who} warning {strikes}/3: banned sticker removed ({why}).",
+            f"{who}, I removed that sticker ({why}). Warning {strikes}/3.",
             event="Warning",
         )
         return

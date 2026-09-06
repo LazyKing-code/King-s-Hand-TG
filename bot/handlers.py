@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-
+import time
 from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -31,7 +31,6 @@ from bot.moderation import (
     require_group_admin,
     require_group_owner,
     resolve_target,
-    send_placeholder,
 )
 
 from bot.nsfw import is_nsfw_sticker
@@ -40,6 +39,8 @@ log = logging.getLogger(__name__)
 
 TARGET_HINT = "Reply to them, or mention them."
 _PENDING_LOG: dict[int, int] = {}
+_REPORT_WINDOW = 25.0
+_report_batch: dict[int, dict] = {}
 
 
 def command_payload(update: Update) -> str:
@@ -104,6 +105,8 @@ async def on_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if is_immune(user.id, chat.id) or await is_owner(update, user.id):
         return
+    if await is_group_admin(update, user.id):
+        return
 
     nsfw, reason = await is_nsfw_sticker(sticker, chat.id, context.bot)
     if not nsfw:
@@ -117,11 +120,6 @@ async def on_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             "I saw a banned sticker but could not delete it. I need permission to delete messages."
         )
         return
-
-    try:
-        await send_placeholder(context, chat.id)
-    except Exception:
-        log.exception("Placeholder failed")
 
     try:
         await apply_punishment(update, context, user, reason)
@@ -274,29 +272,72 @@ async def cmd_owners(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_group_admin(update):
         return
-    reply = update.effective_message.reply_to_message
+    msg = update.effective_message
+    chat = update.effective_chat
+    reply = msg.reply_to_message
     if not reply or not reply.sticker:
-        await update.effective_message.reply_text(
+        await msg.reply_text(
             f"Reply to a sticker with {cmd('report')} and I will ban that pack."
         )
         return
+    chat_id = chat.id
     set_name = reply.sticker.set_name
-    if not set_name:
-        db.cache_set(reply.sticker.file_unique_id, True, None)
-        db.ban_sticker(update.effective_chat.id, reply.sticker.file_unique_id)
-        try:
-            await reply.delete()
-        except Exception:
-            pass
-        await update.effective_message.reply_text("That sticker has no pack; I banned this file only.")
-        return
-    db.ban_pack(update.effective_chat.id, set_name)
-    db.cache_set(reply.sticker.file_unique_id, True, set_name)
     try:
         await reply.delete()
     except Exception:
         pass
-    await update.effective_message.reply_text(f"Banned pack: {set_name}")
+
+    if not set_name:
+        db.cache_set(reply.sticker.file_unique_id, True, None)
+        db.ban_sticker(chat_id, reply.sticker.file_unique_id)
+        label = "this sticker (no pack)"
+        already = False
+    else:
+        already = db.pack_banned(chat_id, set_name)
+        db.ban_pack(chat_id, set_name)
+        db.cache_set(reply.sticker.file_unique_id, True, set_name)
+        label = set_name
+
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+    if already:
+        return
+    await _ack_report(context, chat_id, label)
+
+
+async def _ack_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int, label: str) -> None:
+    now = time.time()
+    batch = _report_batch.get(chat_id)
+    if batch and now < batch["expires"]:
+        names: list[str] = batch["names"]
+        if label not in names:
+            names.append(label)
+        batch["expires"] = now + _REPORT_WINDOW
+        shown = names[-10:]
+        extra = f"\n… +{len(names) - 10} more" if len(names) > 10 else ""
+        body = (
+            f"Banned {len(names)} pack(s):\n"
+            + "\n".join(f"• {n}" for n in shown)
+            + extra
+        )
+        try:
+            await context.bot.edit_message_text(
+                body,
+                chat_id=chat_id,
+                message_id=batch["msg_id"],
+            )
+        except TelegramError:
+            pass
+        return
+    sent = await context.bot.send_message(chat_id, f"Banned pack: {label}")
+    _report_batch[chat_id] = {
+        "expires": now + _REPORT_WINDOW,
+        "names": [label],
+        "msg_id": sent.message_id,
+    }
 
 
 async def cmd_blockpack(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -595,16 +636,8 @@ async def on_packs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def cmd_setplaceholder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_group_owner(update):
         return
-    reply = update.effective_message.reply_to_message
-    if not reply or not reply.sticker:
-        await update.effective_message.reply_text(
-            "Reply to the sticker I should post after deleting a banned sticker."
-        )
-        return
-    db.set_placeholder(update.effective_chat.id, reply.sticker.file_id)
     await update.effective_message.reply_text(
-        "Saved. I will send this sticker after I delete a banned one.\n"
-        "Telegram still shows the original for a moment; this replaces it right after."
+        "I no longer post a replacement sticker. After a delete I tag the sender in a text notice."
     )
 
 
@@ -613,7 +646,7 @@ async def cmd_clearplaceholder(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     db.set_placeholder(update.effective_chat.id, None)
     await update.effective_message.reply_text(
-        "Custom placeholder cleared. I will use the default removed sticker again."
+        "Noted. Removal notices stay as a tagged message — no sticker is posted."
     )
 
 
