@@ -144,6 +144,12 @@ def init() -> None:
                 prompt_msg_id INTEGER,
                 PRIMARY KEY (chat_id, user_id)
             );
+            CREATE TABLE IF NOT EXISTS bot_users (
+                user_id INTEGER PRIMARY KEY,
+                started_at INTEGER NOT NULL,
+                last_seen INTEGER NOT NULL,
+                last_release TEXT
+            );
             CREATE TABLE IF NOT EXISTS game_wallet (
                 chat_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
@@ -1257,3 +1263,53 @@ def list_game_top(
             params,
         ).fetchall()
         return [(int(r["user_id"]), int(r["score"])) for r in rows]
+
+
+def touch_bot_user(user_id: int) -> None:
+    now = int(time.time())
+    with cursor() as conn:
+        conn.execute(
+            """
+            INSERT INTO bot_users(user_id, started_at, last_seen, last_release)
+            VALUES (?, ?, ?, NULL)
+            ON CONFLICT(user_id) DO UPDATE SET last_seen=excluded.last_seen
+            """,
+            (user_id, now, now),
+        )
+
+
+def list_bot_users() -> list[int]:
+    with cursor() as conn:
+        rows = conn.execute("SELECT user_id FROM bot_users ORDER BY user_id").fetchall()
+        return [int(r["user_id"]) for r in rows]
+
+
+def bot_user_release(user_id: int) -> str | None:
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT last_release FROM bot_users WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        if not row or row["last_release"] is None:
+            return None
+        return str(row["last_release"])
+
+
+def set_bot_user_release(user_id: int, release_id: str) -> None:
+    now = int(time.time())
+    with cursor() as conn:
+        conn.execute(
+            """
+            INSERT INTO bot_users(user_id, started_at, last_seen, last_release)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                last_release=excluded.last_release,
+                last_seen=excluded.last_seen
+            """,
+            (user_id, now, now, release_id),
+        )
+
+
+def drop_bot_user(user_id: int) -> None:
+    with cursor() as conn:
+        conn.execute("DELETE FROM bot_users WHERE user_id=?", (user_id,))

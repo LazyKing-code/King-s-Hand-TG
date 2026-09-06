@@ -5,6 +5,7 @@ from telegram.constants import ChatType
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
+from bot import db
 from bot.commands import cmd
 from bot.invite import ADD_TEXT, bot_username, url_buttons
 
@@ -29,6 +30,7 @@ def _pages() -> dict[str, str]:
             f"<blockquote>{cmd('scold')}\n{cmd('scold')} @username</blockquote>\n"
             f"<b>{cmd('gamehelp')}</b> — games: toss, dice, lucky 7, stone-paper, hand cricket\n"
             f"<blockquote>{cmd('daily')} · {cmd('top')} · {cmd('cricket')} @user</blockquote>\n"
+            f"<b>{cmd('whatsnew')}</b> — latest official update\n"
             f"<b>{cmd('stats')}</b> — your role, approval, warnings, and what you can do\n"
             f"<b>{cmd('notag')}</b> — skip group pings · <b>{cmd('tagme')}</b> — get them again\n\n"
             "<b>Calculator</b> — no command. Send only the sum.\n"
@@ -48,6 +50,7 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('scold')}</b> — playful roast. Reply or add their username.\n"
             f"<blockquote>{cmd('scold')}\n{cmd('scold')} @username</blockquote>\n"
             f"<b>{cmd('gamehelp')}</b> — how to play · {cmd('daily')} streak · {cmd('top')} board\n"
+            f"<b>{cmd('whatsnew')}</b> — latest official update\n"
             f"<b>{cmd('stats')}</b> — your role, approval, warnings, and what you can do\n"
             f"<b>{cmd('notag')}</b> — skip group pings · <b>{cmd('tagme')}</b> — get them again\n\n"
             "<b>Calculator</b> — no command. Send only the sum.\n"
@@ -108,7 +111,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('setplaceholder')}</b> · <b>{cmd('setkickmsg')}</b>\n"
             f"<b>{cmd('allowpack')}</b> · <b>{cmd('allowsticker')}</b> · "
             f"<b>{cmd('packs')}</b> — undo a false sticker ban\n"
-            f"<b>{cmd('addowner')}</b> · <b>{cmd('removeowner')}</b> · <b>{cmd('owners')}</b>\n\n"
+            f"<b>{cmd('addowner')}</b> · <b>{cmd('removeowner')}</b> · <b>{cmd('owners')}</b>\n"
+            f"<b>{cmd('release')} send</b> — official update to people who /start the bot\n\n"
             "You are never punished for stickers."
         ),
         "add": (
@@ -191,6 +195,8 @@ _ALIASES = {
     "raid": "owner",
     "stickers": "admins",
     "overview": "index",
+    "whatsnew": "you",
+    "release": "owner",
 }
 
 
@@ -202,6 +208,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         key = _ALIASES.get(raw, raw if raw in _pages() else "index")
     if key == "add" and not private:
         key = "index"
+    if private and update.effective_user:
+        db.touch_bot_user(update.effective_user.id)
     username = await bot_username(context)
     await update.effective_message.reply_html(
         _page(key),

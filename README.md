@@ -110,6 +110,8 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/rps` | Stone-paper-scissors vs a member |
 | `/cricket` | Hand cricket vs a member (one over each) |
 | `/tag` | Set a member tag; `/tag null` clears it |
+| `/whatsnew` | Official update card (also sent in private to people who `/start`) |
+| `/release send` | Owner only: deliver that card to known starters |
 | `/help` | Command guide |
 
 Send `2+2` or `(5*3)/2` with no command — the bot replies with the answer.
