@@ -10,6 +10,7 @@ from telegram import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeDefault,
 )
+from telegram.error import Conflict
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -174,6 +175,7 @@ def _bot_commands(items: list[tuple[str, str]]) -> list[BotCommand]:
 
 
 async def on_startup(app: Application) -> None:
+    await app.bot.delete_webhook(drop_pending_updates=True)
     await app.bot.set_my_commands(
         [BotCommand("start", "Start / add to a group"), BotCommand("help", "Help in private chat")],
         scope=BotCommandScopeDefault(),
@@ -194,6 +196,18 @@ async def on_shutdown(app: Application) -> None:
         task = app.bot_data.get(key)
         if task:
             task.cancel()
+
+
+async def on_error(update: object, context: object) -> None:
+    err = getattr(context, "error", None)
+    if isinstance(err, Conflict):
+        log.warning(
+            "Telegram rejected this poller — another copy is using the same token. "
+            "Stop extra Railway services and any local python -m bot.main. "
+            "Group commands will not work until only one copy is running."
+        )
+        return
+    log.exception("Unhandled error", exc_info=err)
 
 
 def main() -> None:
@@ -315,6 +329,7 @@ def main() -> None:
         MessageHandler(filters.ALL & ~filters.StatusUpdate.ALL, on_flood),
         group=2,
     )
+    app.add_error_handler(on_error)
     log.info("Bot starting")
     app.run_polling(
         allowed_updates=["message", "chat_member", "callback_query"],
