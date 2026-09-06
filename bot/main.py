@@ -21,7 +21,7 @@ from telegram.ext import (
 from bot import db
 from bot.calc import on_calc
 from bot.commands import add_cmd, cmd, cmd_name
-from bot.config import BOT_TOKEN, COMMAND_PREFIX
+from bot.config import BOT_TOKEN
 from bot.flood import cmd_flood, cmd_floodmute, on_flood
 from bot.fun import cmd_scold
 from bot.games import (
@@ -180,7 +180,7 @@ async def on_startup(app: Application) -> None:
         _bot_commands(_STAFF_COMMANDS),
         scope=BotCommandScopeAllChatAdministrators(),
     )
-    log.info("Group commands use %s (e.g. %s)", COMMAND_PREFIX, cmd("help"))
+    log.info("Commands ready (e.g. %s)", cmd("help"))
     await schedule_pending_jobs(app)
     app.create_task(daily_zombies_loop(app))
 

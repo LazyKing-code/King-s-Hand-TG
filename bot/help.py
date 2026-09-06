@@ -13,10 +13,10 @@ def _pages() -> dict[str, str]:
     return {
         "index": (
             "<b>King's Hand</b>\n"
-            f"Group commands look like <code>{cmd('help')}</code>, "
-            f"<code>{cmd('kick')}</code> — not <code>/help</code> / <code>/kick</code> "
-            "(those stay for other bots).\n"
-            f"Private chat: <code>/start</code> and <code>/help</code> still work.\n\n"
+            f"Send <code>{cmd('help')}</code> in the group for this guide. "
+            f"Staff tools like <code>{cmd('kick')}</code> and <code>{cmd('lock')}</code> "
+            "are in the buttons below.\n"
+            f"Private chat: <code>/start</code> and <code>{cmd('help')}</code> work too.\n\n"
             "Anyone in the group can use these:\n\n"
             f"<b>{cmd('help')}</b> — this guide\n"
             f"<b>{cmd('rules')}</b> — group rules\n"
