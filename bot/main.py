@@ -65,6 +65,8 @@ from bot.handlers import (
     cmd_unapprove,
     cmd_unsetlog,
     cmd_untrust,
+    cmd_unreport,
+    cmd_unreportall,
     on_sticker,
     start,
 )
@@ -160,6 +162,8 @@ _STAFF_COMMANDS = _MEMBER_COMMANDS + [
     ("flood", "Anti-flood settings"),
     ("pin", "Pin a message"),
     ("report", "Ban a sticker pack"),
+    ("unreport", "Unreport a pack (owner)"),
+    ("unreportall", "Clear all reports (owner)"),
     ("packs", "Banned sticker packs"),
     ("strikes", "Sticker warnings"),
     ("tag", "Set a member tag"),
@@ -258,6 +262,8 @@ def main() -> None:
     add_cmd(app, "removeowner", cmd_removeowner)
     add_cmd(app, "owners", cmd_owners)
     add_cmd(app, ["report", "blockpack"], cmd_report)
+    add_cmd(app, "unreport", cmd_unreport)
+    add_cmd(app, ["unreportall", "clearreports"], cmd_unreportall)
     add_cmd(app, ["packs", "bannedpacks", "unbanpack"], cmd_packs)
     add_cmd(app, "allowpack", cmd_allowpack)
     add_cmd(app, "allowsticker", cmd_allowsticker)

@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 
 TARGET_HINT = "Reply to them, or mention them."
 _PENDING_LOG: dict[int, int] = {}
-_REPORT_WINDOW = 25.0
+_REPORT_WINDOW = 6.0
 _report_batch: dict[int, dict] = {}
 
 
@@ -104,8 +104,6 @@ async def on_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
     if is_immune(user.id, chat.id) or await is_owner(update, user.id):
-        return
-    if await is_group_admin(update, user.id):
         return
 
     nsfw, reason = await is_nsfw_sticker(sticker, chat.id, context.bot)
@@ -281,34 +279,40 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
     chat_id = chat.id
+    unique = reply.sticker.file_unique_id
     set_name = reply.sticker.set_name
     try:
         await reply.delete()
     except Exception:
         pass
 
-    if not set_name:
-        db.cache_set(reply.sticker.file_unique_id, True, None)
-        db.ban_sticker(chat_id, reply.sticker.file_unique_id)
-        label = "this sticker (no pack)"
-        already = False
-    else:
-        already = db.pack_banned(chat_id, set_name)
+    db.disallow_sticker(unique)
+    already = db.sticker_banned(chat_id, unique) or (
+        bool(set_name) and db.pack_banned(chat_id, set_name)
+    )
+    db.ban_sticker(chat_id, unique)
+    db.cache_set(unique, True, set_name)
+    if set_name:
         db.ban_pack(chat_id, set_name)
-        db.cache_set(reply.sticker.file_unique_id, True, set_name)
         label = set_name
+    else:
+        label = "this sticker (no pack)"
 
     try:
         await msg.delete()
     except Exception:
         pass
 
-    if already:
-        return
-    await _ack_report(context, chat_id, label)
+    await _ack_report(context, chat_id, label, already=already)
 
 
-async def _ack_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int, label: str) -> None:
+async def _ack_report(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    label: str,
+    *,
+    already: bool = False,
+) -> None:
     now = time.time()
     batch = _report_batch.get(chat_id)
     if batch and now < batch["expires"]:
@@ -332,7 +336,8 @@ async def _ack_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int, label: s
         except TelegramError:
             pass
         return
-    sent = await context.bot.send_message(chat_id, f"Banned pack: {label}")
+    text = f"Already banned: {label}" if already else f"Banned pack: {label}"
+    sent = await context.bot.send_message(chat_id, text)
     _report_batch[chat_id] = {
         "expires": now + _REPORT_WINDOW,
         "names": [label],
@@ -344,8 +349,80 @@ async def cmd_blockpack(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await cmd_report(update, context)
 
 
+async def cmd_unreport(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group_owner(update):
+        return
+    chat_id = update.effective_chat.id
+    msg = update.effective_message
+    reply = msg.reply_to_message
+    if reply and reply.sticker:
+        unique = reply.sticker.file_unique_id
+        set_name = reply.sticker.set_name
+        db.unban_sticker(chat_id, unique)
+        db.disallow_sticker(unique)
+        if set_name:
+            db.unban_pack(chat_id, set_name)
+            db.unallow_pack(chat_id, set_name)
+            await msg.reply_html(
+                f"Unreported <code>{escape(set_name)}</code> and this sticker. "
+                f"Reply {cmd('report')} if it should be banned again."
+            )
+        else:
+            await msg.reply_text(
+                f"Unreported that sticker. Reply {cmd('report')} to ban it again."
+            )
+        return
+    rest = " ".join(context.args or []).strip()
+    if not rest:
+        await msg.reply_text(
+            f"Reply to a sticker with {cmd('unreport')}, or "
+            f"{cmd('packs')} (owner) to pick one from the list.\n"
+            f"To wipe every report: {cmd('unreportall')} confirm"
+        )
+        return
+    banned = db.list_banned_packs(chat_id)
+    stickers = db.list_banned_stickers(chat_id)
+    if rest.lower().startswith("s") and rest[1:].isdigit():
+        target = _pick_index(stickers, rest[1:])
+        if not target:
+            await msg.reply_text("No banned sticker with that number.")
+            return
+        db.unban_sticker(chat_id, target)
+        db.disallow_sticker(target)
+        await msg.reply_text("Unreported that sticker.")
+        return
+    target = _pick_index(banned, rest)
+    if not target:
+        await msg.reply_text("That pack is not on the banned list.")
+        return
+    db.unban_pack(chat_id, target)
+    db.unallow_pack(chat_id, target)
+    await msg.reply_html(f"Unreported <code>{escape(target)}</code>.")
+
+
+async def cmd_unreportall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group_owner(update):
+        return
+    args = [a.lower() for a in (context.args or [])]
+    if "confirm" not in args:
+        packs = len(db.list_banned_packs(update.effective_chat.id))
+        stickers = len(db.list_banned_stickers(update.effective_chat.id))
+        await update.effective_message.reply_text(
+            f"This clears every reported pack ({packs}) and sticker ({stickers}) in this group.\n"
+            "Auto-scan memory for those items is also cleared. "
+            f"Then reply {cmd('report')} on stickers you want banned.\n\n"
+            f"Send {cmd('unreportall')} confirm to run it."
+        )
+        return
+    packs, stickers = db.clear_chat_reports(update.effective_chat.id)
+    await update.effective_message.reply_text(
+        f"Cleared {packs} pack(s) and {stickers} sticker(s). "
+        f"Reply {cmd('report')} to ban them again one by one."
+    )
+
+
 async def cmd_allowpack(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await require_group_admin(update):
+    if not await require_group_owner(update):
         return
     chat_id = update.effective_chat.id
     msg = update.effective_message
@@ -366,7 +443,7 @@ async def cmd_allowpack(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_allowsticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await require_group_admin(update):
+    if not await require_group_owner(update):
         return
     msg = update.effective_message
     reply = msg.reply_to_message
@@ -426,7 +503,12 @@ async def cmd_packs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if args:
         action = args[0].lower()
         rest = " ".join(args[1:]).strip()
-        if action in {"unban", "remove", "del", "allow"}:
+        if action in {"unban", "remove", "del", "allow", "unreport"}:
+            if not await is_owner(update, update.effective_user.id):
+                await msg.reply_text(
+                    f"Only the owner can unreport. Admins can still {cmd('report')}."
+                )
+                return
             if not rest:
                 await msg.reply_text(
                     f"Which pack? Example: {cmd('packs')} unban 2\n"
@@ -453,6 +535,9 @@ async def cmd_packs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
         if action in {"unallow", "unwhitelist"}:
+            if not await is_owner(update, update.effective_user.id):
+                await msg.reply_text("Only the owner can change the whitelist.")
+                return
             if not rest:
                 await msg.reply_text(f"Example: {cmd('packs')} unallow 1")
                 return
@@ -513,15 +598,16 @@ def _packs_markup(
 def _packs_text(banned: list[str], stickers: list[str], allowed: list[str]) -> str:
     lines = [
         "<b>Banned packs</b>",
-        "The sticker is deleted after a report. Use the buttons, or the number — no reply needed.",
+        "The sticker is deleted after a report. "
+        f"Admins: {cmd('report')}. Owner: unreport from the list or {cmd('unreportall')}.",
     ]
     if banned:
         for i, name in enumerate(banned, 1):
             link = f"https://t.me/addstickers/{name}"
             lines.append(f'{i}. <a href="{link}">{escape(name)}</a>')
         lines.append(
-            f"Or: <code>{cmd('packs')} unban 2</code> · "
-            f"<code>{cmd('allowpack')} PackName</code>"
+            f"Or owner: <code>{cmd('packs')} unban 2</code> · "
+            f"<code>{cmd('unreport')}</code> (reply)"
         )
     else:
         lines.append("None")
@@ -532,7 +618,7 @@ def _packs_text(banned: list[str], stickers: list[str], allowed: list[str]) -> s
         for i, uid in enumerate(stickers, 1):
             shown = escape(uid if len(uid) <= 24 else uid[:20] + "…")
             lines.append(f"s{i}. <code>{shown}</code>")
-        lines.append(f"Tap <b>Allow s1</b> or <code>{cmd('packs')} unban s1</code>")
+        lines.append(f"Tap <b>Allow s1</b> (owner) or <code>{cmd('unreport')} s1</code>")
     else:
         lines.append("None")
 
@@ -574,8 +660,8 @@ async def on_packs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not user or not chat:
         await query.answer()
         return
-    if not await is_group_admin(update, user.id):
-        await query.answer("Only admins can change this list.", show_alert=True)
+    if not await is_owner(update, user.id):
+        await query.answer("Only the owner can unreport.", show_alert=True)
         return
     parts = query.data.split(":")
     if len(parts) != 3:
@@ -671,12 +757,14 @@ async def cmd_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     count, kick_on_next = db.get_strikes(update.effective_chat.id, target.id)
     approved = db.is_approved(update.effective_chat.id, target.id)
     trusted = is_immune(target.id, update.effective_chat.id)
+    db_trusted = db.is_trusted(update.effective_chat.id, target.id)
     await update.effective_message.reply_html(
         f"{mention(target)}\n"
         f"Warnings: {count}\n"
         f"Kick on next: {kick_on_next}\n"
         f"Approved: {approved}\n"
-        f"Do not punish: {trusted}"
+        f"Trusted: {db_trusted}\n"
+        f"Immune: {trusted}"
     )
 
 

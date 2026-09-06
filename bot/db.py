@@ -423,6 +423,60 @@ def unban_sticker(chat_id: int, file_unique_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def unban_pack(chat_id: int, set_name: str) -> bool:
+    with cursor() as conn:
+        cur = conn.execute(
+            "DELETE FROM banned_packs WHERE chat_id=? AND set_name=?",
+            (chat_id, set_name),
+        )
+        conn.execute(
+            "DELETE FROM sticker_cache WHERE set_name=?",
+            (set_name,),
+        )
+        return cur.rowcount > 0
+
+
+def disallow_sticker(file_unique_id: str) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "DELETE FROM allowed_stickers WHERE file_unique_id=?",
+            (file_unique_id,),
+        )
+
+
+def clear_chat_reports(chat_id: int) -> tuple[int, int]:
+    with cursor() as conn:
+        packs = [
+            str(r["set_name"])
+            for r in conn.execute(
+                "SELECT set_name FROM banned_packs WHERE chat_id=?",
+                (chat_id,),
+            ).fetchall()
+        ]
+        stickers = [
+            str(r["file_unique_id"])
+            for r in conn.execute(
+                "SELECT file_unique_id FROM banned_stickers WHERE chat_id=?",
+                (chat_id,),
+            ).fetchall()
+        ]
+        conn.execute("DELETE FROM banned_packs WHERE chat_id=?", (chat_id,))
+        conn.execute("DELETE FROM banned_stickers WHERE chat_id=?", (chat_id,))
+        conn.execute("DELETE FROM allowed_packs WHERE chat_id=?", (chat_id,))
+        for unique in stickers:
+            conn.execute(
+                "DELETE FROM sticker_cache WHERE file_unique_id=?",
+                (unique,),
+            )
+            conn.execute(
+                "DELETE FROM allowed_stickers WHERE file_unique_id=?",
+                (unique,),
+            )
+        for name in packs:
+            conn.execute("DELETE FROM sticker_cache WHERE set_name=?", (name,))
+        return len(packs), len(stickers)
+
+
 def sticker_allowed(file_unique_id: str) -> bool:
     with cursor() as conn:
         row = conn.execute(

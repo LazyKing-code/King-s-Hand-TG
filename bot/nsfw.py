@@ -47,36 +47,32 @@ def pack_name_looks_nsfw(set_name: str | None) -> bool:
 
 
 async def is_nsfw_sticker(sticker: Sticker, chat_id: int, bot) -> tuple[bool, str]:
-    """Return (is_nsfw, reason). Owner allowlists always win."""
+    """Return (is_nsfw, reason). Manual reports in this chat beat old allow-lists."""
     unique = sticker.file_unique_id
     set_name = sticker.set_name
 
+    if db.sticker_banned(chat_id, unique):
+        return True, "reported sticker"
+    if db.pack_banned(chat_id, set_name):
+        return True, f"reported pack {set_name}"
     if db.sticker_allowed(unique):
         return False, "whitelisted sticker"
-    if db.sticker_banned(chat_id, unique):
-        return True, "banned sticker"
     if db.pack_allowed(chat_id, set_name):
         return False, "whitelisted pack"
-    if db.pack_banned(chat_id, set_name):
-        return True, f"banned pack {set_name}"
     if pack_name_looks_nsfw(set_name):
         db.ban_pack(chat_id, set_name)
+        db.ban_sticker(chat_id, unique)
         db.cache_set(unique, True, set_name)
         return True, f"pack name {set_name}"
 
     cached = db.cache_get(unique)
     if cached is not None:
-        if cached and set_name:
-            db.ban_pack(chat_id, set_name)
-        elif cached:
+        if cached:
             db.ban_sticker(chat_id, unique)
         return cached, "cached scan"
 
     nsfw = await _scan_sticker_image(sticker, bot)
     db.cache_set(unique, nsfw, set_name)
-    if nsfw and set_name:
-        db.ban_pack(chat_id, set_name)
-        return True, f"image scan; pack {set_name} auto-banned"
     if nsfw:
         db.ban_sticker(chat_id, unique)
         return True, "image scan"

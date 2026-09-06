@@ -6,7 +6,7 @@ from html import escape
 
 from telegram import ChatMember, Message, Update, User
 from telegram.constants import ChatType
-from telegram.error import RetryAfter
+from telegram.error import RetryAfter, TelegramError
 from telegram.ext import ContextTypes
 
 from bot import db
@@ -158,12 +158,63 @@ async def send_to_log(
         log.exception("Log chat send failed for %s", source_chat_id)
 
 
+_NOTICE_WINDOW = 5.0
+_notice_batch: dict[tuple[int, int], dict] = {}
+
+
 async def notify(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
     html: str,
     event: str = "Notice",
+    *,
+    batch_user: User | None = None,
 ) -> None:
+    body = html
+    if batch_user is not None:
+        key = (chat_id, batch_user.id)
+        now = time.time()
+        batch = _notice_batch.get(key)
+        if batch and now < batch["expires"]:
+            batch["count"] += 1
+            batch["html"] = html
+            batch["expires"] = now + _NOTICE_WINDOW
+            extra = (
+                f"\n({batch['count']} stickers removed just now)"
+                if batch["count"] > 1
+                else ""
+            )
+            body = html + extra
+            try:
+                await context.bot.edit_message_text(
+                    body,
+                    chat_id=chat_id,
+                    message_id=batch["msg_id"],
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+            except TelegramError:
+                pass
+            await send_to_log(context, chat_id, body, event)
+            return
+        try:
+            sent = await context.bot.send_message(
+                chat_id,
+                body,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            log.exception("Group notify failed")
+            await send_to_log(context, chat_id, body, event)
+            return
+        _notice_batch[key] = {
+            "expires": now + _NOTICE_WINDOW,
+            "count": 1,
+            "msg_id": sent.message_id,
+        }
+        await send_to_log(context, chat_id, body, event)
+        return
     try:
         await context.bot.send_message(
             chat_id,
@@ -285,16 +336,58 @@ async def promote_limited(
     await context.bot.promote_chat_member(chat_id=chat.id, user_id=user_id, **flags)
 
 
+_DEMOTE_FLAGS = {
+    "is_anonymous": False,
+    "can_manage_chat": False,
+    "can_delete_messages": False,
+    "can_manage_video_chats": False,
+    "can_restrict_members": False,
+    "can_promote_members": False,
+    "can_change_info": False,
+    "can_invite_users": False,
+    "can_post_messages": False,
+    "can_edit_messages": False,
+    "can_pin_messages": False,
+    "can_post_stories": False,
+    "can_edit_stories": False,
+    "can_delete_stories": False,
+    "can_manage_topics": False,
+    "can_manage_direct_messages": False,
+}
+
+
 async def demote(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> bool:
     try:
-        chat = await context.bot.get_chat(chat_id)
         me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        await context.bot.promote_chat_member(
-            chat_id=chat_id,
-            user_id=user_id,
-            **_admin_rights_kwargs(me, chat, grant=False),
-        )
-        return True
+        if me.status == ChatMember.ADMINISTRATOR and not getattr(
+            me, "can_promote_members", False
+        ):
+            log.warning("Cannot demote %s: bot lacks Add admins", user_id)
+            return False
+        target = await context.bot.get_chat_member(chat_id, user_id)
+        if target.status == ChatMember.OWNER:
+            return False
+        if target.status != ChatMember.ADMINISTRATOR:
+            return True
+        if not getattr(target, "can_be_edited", False):
+            log.warning(
+                "Cannot demote %s: not promoted by this bot (can_be_edited=false)",
+                user_id,
+            )
+            return False
+        try:
+            await context.bot.promote_chat_member(
+                chat_id=chat_id, user_id=user_id, **_DEMOTE_FLAGS
+            )
+        except Exception:
+            chat = await context.bot.get_chat(chat_id)
+            await context.bot.promote_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                **_admin_rights_kwargs(me, chat, grant=False),
+            )
+        after = await context.bot.get_chat_member(chat_id, user_id)
+        return after.status != ChatMember.ADMINISTRATOR
     except Exception:
         log.exception("Failed to demote %s", user_id)
         return False
@@ -337,15 +430,11 @@ async def demote_all_admins(
     return ok_count, failed
 
 
-_PLACEHOLDER_GAP = 18.0
 _last_placeholder: dict[int, float] = {}
 
 
 async def send_placeholder(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
     now = time.time()
-    last = _last_placeholder.get(chat_id, 0.0)
-    if now - last < _PLACEHOLDER_GAP:
-        return
     _last_placeholder[chat_id] = now
 
     async def _send() -> None:
@@ -404,7 +493,12 @@ async def apply_punishment(
     chat = update.effective_chat
     assert chat
     chat_id = chat.id
-    status = await member_status(update, user.id)
+    try:
+        status = await member_status(update, user.id)
+    except Exception:
+        return
+    if status in (ChatMember.LEFT, ChatMember.BANNED):
+        return
     strikes, kick_on_next = db.get_strikes(chat_id, user.id)
     approved = db.is_approved(chat_id, user.id)
     who = mention(user)
@@ -419,6 +513,7 @@ async def apply_punishment(
             f"{who} was on {cmd('approve')}. I removed that sticker ({why}).\n"
             "Approval is gone. Next banned sticker will get them kicked.",
             event="Unapproved",
+            batch_user=user,
         )
         return
 
@@ -431,6 +526,7 @@ async def apply_punishment(
                     f"Could not kick {who} while they are still admin. "
                     f"Drop them, then {cmd('makeadmin')} them through the bot.",
                     event="Kick failed",
+                    batch_user=user,
                 )
                 return
         ok = await kick(context, chat_id, user.id)
@@ -448,6 +544,7 @@ async def apply_punishment(
                 f"{who}, I removed that sticker ({why}). Warning {strikes}/3.\n"
                 "At 3 warnings you will be demoted.",
                 event="Warning",
+                batch_user=user,
             )
             return
         ok = await demote(context, chat_id, user.id)
@@ -459,6 +556,7 @@ async def apply_punishment(
                 f"{who} reached 3/3 warnings and was demoted.\n"
                 "Sending another banned sticker will get them kicked.",
                 event="Demoted",
+                batch_user=user,
             )
         else:
             await notify(
@@ -468,6 +566,7 @@ async def apply_punishment(
                 f"The bot can only demote admins <b>it</b> made with {cmd('makeadmin')}. "
                 f"Drop them yourself, then reply with {cmd('makeadmin')}.",
                 event="Demote failed",
+                batch_user=user,
             )
         return
 
@@ -479,6 +578,7 @@ async def apply_punishment(
             chat_id,
             f"{who}, I removed that sticker ({why}). Warning {strikes}/3.",
             event="Warning",
+            batch_user=user,
         )
         return
 
@@ -490,14 +590,26 @@ async def apply_punishment(
 _SKIP_USER_IDS = {777000, 1087968824}  # Telegram / Group Anonymous Bot
 
 
-async def _user_from_username(context: ContextTypes.DEFAULT_TYPE, username: str) -> User | None:
-    name = username.strip()
-    if not name:
+async def _user_from_username(
+    context: ContextTypes.DEFAULT_TYPE,
+    username: str,
+    chat_id: int | None = None,
+) -> User | None:
+    needle = username.strip().lstrip("@").lower()
+    if not needle:
         return None
-    if not name.startswith("@"):
-        name = f"@{name}"
+    if context.bot.username and needle == context.bot.username.lower():
+        return None
+    if chat_id:
+        try:
+            for admin in await context.bot.get_chat_administrators(chat_id):
+                uname = admin.user.username
+                if uname and uname.lower() == needle:
+                    return admin.user
+        except Exception:
+            pass
     try:
-        info = await context.bot.get_chat(name)
+        info = await context.bot.get_chat(f"@{needle}")
     except Exception:
         return None
     if info.type != ChatType.PRIVATE or not info.id:
@@ -505,7 +617,7 @@ async def _user_from_username(context: ContextTypes.DEFAULT_TYPE, username: str)
     return User(
         id=info.id,
         is_bot=False,
-        first_name=info.first_name or name,
+        first_name=info.first_name or needle,
         last_name=info.last_name,
         username=info.username,
     )
@@ -513,12 +625,13 @@ async def _user_from_username(context: ContextTypes.DEFAULT_TYPE, username: str)
 
 async def resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> User | None:
     msg: Message = update.effective_message
+    chat = update.effective_chat
+    chat_id = chat.id if chat else None
     reply = msg.reply_to_message
     if reply and reply.from_user:
         uid = reply.from_user.id
         if uid not in _SKIP_USER_IDS:
-            if not (reply.sender_chat and update.effective_chat
-                    and reply.sender_chat.id == update.effective_chat.id):
+            if not (reply.sender_chat and chat and reply.sender_chat.id == chat.id):
                 return reply.from_user
     if msg.entities:
         for entity in msg.entities:
@@ -526,7 +639,7 @@ async def resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 return entity.user
             if entity.type == "mention":
                 raw = (msg.text or msg.caption or "")[entity.offset : entity.offset + entity.length]
-                found = await _user_from_username(context, raw)
+                found = await _user_from_username(context, raw, chat_id)
                 if found:
                     return found
     args = context.args or []
@@ -535,7 +648,6 @@ async def resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     raw = args[0].strip()
     if raw.lstrip("-").isdigit():
         uid = int(raw)
-        chat = update.effective_chat
         if chat:
             try:
                 member = await context.bot.get_chat_member(chat.id, uid)
@@ -543,4 +655,4 @@ async def resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception:
                 pass
         return User(id=uid, first_name=str(uid), is_bot=False)
-    return await _user_from_username(context, raw)
+    return await _user_from_username(context, raw, chat_id)

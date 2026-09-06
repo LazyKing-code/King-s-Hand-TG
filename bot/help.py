@@ -40,7 +40,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('whisper')}</b> — reply, then a private note only they can open\n"
             f"<blockquote>{cmd('whisper')} stay after the call</blockquote>\n"
             f"<b>{cmd('scold')}</b> — playful roast. Reply or @username\n"
-            f"<b>{cmd('stats')}</b> — your role, approval, warnings\n"
+            f"<b>{cmd('stats')}</b> — role, immune, trust, approval, warnings "
+            "(admins: reply or tag someone)\n"
             f"<b>{cmd('notag')}</b> · <b>{cmd('tagme')}</b> — skip or join group pings\n"
             f"<b>{cmd('whatsnew')}</b> — official update\n\n"
             "<b>Calculator</b> — send only the sum, no command.\n"
@@ -91,8 +92,9 @@ def _pages() -> dict[str, str]:
         ),
         "stickers": (
             "<b>Stickers</b>\n"
-            "I auto-detect NSFW / vulgar sticker packs, delete them, and warn. "
-            "Cartoon packs can slip through.\n\n"
+            "I auto-detect NSFW / vulgar stickers, delete them, and warn. "
+            f"Reply <code>{cmd('report')}</code> to ban a pack. "
+            f"Owner: {cmd('unreport')} / {cmd('unreportall')} then report again by hand.\n\n"
             f"Members: reply <code>{cmd('staff')}</code> to ping admins.\n\n"
             "Pack bans, allow-list, and strikes are <b>admin tools</b> — "
             "they are not shown to everyone. Admins: open Staff."
@@ -126,8 +128,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('report')}</b> · <b>{cmd('packs')}</b> · "
             f"<b>{cmd('strikes')}</b> · <b>{cmd('forgive')}</b>\n"
             f"<b>{cmd('tag')}</b> · <b>{cmd('joins')}</b>\n\n"
-            f"Not for admins: {cmd('tagall')}, {cmd('approve')}, {cmd('trust')}, "
-            f"{cmd('makeadmin')}, raid tools — owner only."
+            f"Not for admins: {cmd('unreport')}, {cmd('unreportall')}, {cmd('tagall')}, "
+            f"{cmd('approve')}, {cmd('trust')}, {cmd('makeadmin')}, raid tools — owner only."
         ),
         "owner": (
             "<b>Owner only</b>\n"
@@ -142,7 +144,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('raidmode')}</b> · <b>{cmd('purgejoins')}</b>\n"
             f"<blockquote>{cmd('purgejoins')} 2h\n{cmd('purgejoins')} 2h confirm</blockquote>\n"
             f"<b>{cmd('setlog')}</b> · <b>{cmd('setkickmsg')}</b>\n"
-            f"<b>{cmd('allowpack')}</b> · <b>{cmd('allowsticker')}</b>\n"
+            f"<b>{cmd('allowpack')}</b> · <b>{cmd('allowsticker')}</b> · "
+            f"<b>{cmd('unreport')}</b> · <b>{cmd('unreportall')}</b>\n"
             f"<b>{cmd('addowner')}</b> · <b>{cmd('removeowner')}</b> · "
             f"<b>{cmd('owners')}</b>\n"
             f"<b>{cmd('release')} send</b> — official update to people who /start the bot"
