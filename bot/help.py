@@ -43,7 +43,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('stats')}</b> — role, immune, trust, approval, warnings "
             "(admins: reply or tag someone)\n"
             f"<b>{cmd('notag')}</b> · <b>{cmd('tagme')}</b> — skip or join group pings\n"
-            f"<b>{cmd('whatsnew')}</b> — official update\n\n"
+            f"<b>{cmd('whatsnew')}</b> — this release · "
+            f"<code>{cmd('whatsnew')} history</code>\n\n"
             "<b>Calculator</b> — send only the sum, no command.\n"
             "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>"
         ),

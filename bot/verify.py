@@ -100,14 +100,17 @@ async def handle_join_gate(
     *,
     banned: bool,
 ) -> bool:
-    """Return True if welcome should be skipped (bot removed, or waiting to verify)."""
+    """Return True if welcome should be skipped (waiting to verify)."""
     if banned or user.id == context.bot.id:
+        return True
+    if user.is_bot:
+        policy = db.verify_bot_policy(chat.id)
+        if policy == "allow":
+            return False
+        await _remove_bot(context, chat, user, ban=policy == "ban")
         return True
     if not db.verify_enabled(chat.id):
         return False
-    if user.is_bot:
-        await _remove_bot(context, chat, user)
-        return True
     if is_immune(user.id, chat.id):
         return False
     try:
@@ -127,9 +130,10 @@ async def handle_join_gate(
     return True
 
 
-async def _remove_bot(context: ContextTypes.DEFAULT_TYPE, chat, user: User) -> None:
+async def _remove_bot(
+    context: ContextTypes.DEFAULT_TYPE, chat, user: User, *, ban: bool
+) -> None:
     chat_id = chat.id
-    ban = db.verify_ban_bots(chat_id)
     _skip_goodbye.add((chat_id, user.id))
     try:
         await context.bot.ban_chat_member(chat_id, user.id)
@@ -169,7 +173,8 @@ async def _start_human_verify(context: ContextTypes.DEFAULT_TYPE, chat, user: Us
         sent = await context.bot.send_message(
             chat_id,
             f"{mention(user)} tap the button within {minutes} min to talk. "
-            "Bots are removed automatically.",
+            "Fake / spam accounts that skip this are removed. "
+            "Telegram bots you add are kept.",
             parse_mode="HTML",
             reply_markup=markup,
         )
@@ -219,7 +224,7 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         db.set_verify_enabled(chat_id, True)
         await msg.reply_text(
             "Join verification is on. New people must tap the button. "
-            "Other bots are banned on join."
+            "Telegram bots you add are kept. Spam joins that skip the button are kicked."
         )
         return
     if args and args[0] in {"off", "disable"}:
@@ -234,15 +239,25 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await cmd_verifypass(update, context)
         return
     if args and args[0] == "bots":
-        if len(args) > 1 and args[1] in {"ban", "kick"}:
-            db.set_verify_ban_bots(chat_id, args[1] == "ban")
+        if len(args) > 1 and args[1] in {"allow", "keep", "off", "skip"}:
+            db.set_verify_bot_policy(chat_id, "allow")
             await msg.reply_text(
-                "Joining bots will be banned (cannot be added again)."
-                if args[1] == "ban"
-                else "Joining bots will be kicked (can be added again)."
+                "Telegram bots (the ones you add from BotFather) are kept. "
+                "Human-looking spam still has to verify, and raidmode still clears flood joins."
             )
             return
-        await msg.reply_text(f"Use {cmd('verify')} bots ban  or  {cmd('verify')} bots kick")
+        if len(args) > 1 and args[1] in {"ban", "kick"}:
+            db.set_verify_bot_policy(chat_id, args[1])
+            await msg.reply_text(
+                "Joining Telegram bots will be banned (cannot be added again)."
+                if args[1] == "ban"
+                else "Joining Telegram bots will be kicked (can be added again)."
+            )
+            return
+        await msg.reply_text(
+            f"{cmd('verify')} bots allow  — keep bots you add (default)\n"
+            f"{cmd('verify')} bots kick · {cmd('verify')} bots ban  — old behaviour"
+        )
         return
     if args and args[0] in {"time", "timeout"}:
         if len(args) < 2:
@@ -274,15 +289,15 @@ async def cmd_verify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     state = "on" if db.verify_enabled(chat_id) else "off"
-    bots = "banned" if db.verify_ban_bots(chat_id) else "kicked"
+    bots = {"allow": "kept", "kick": "kicked", "ban": "banned"}[db.verify_bot_policy(chat_id)]
     waiting = len(db.list_pending_verify(chat_id))
     await msg.reply_text(
         f"Join verify: {state}. Timeout: {db.verify_secs(chat_id) // 60} min. "
-        f"Bots: {bots}. Waiting: {waiting}.\n\n"
+        f"Telegram bots: {bots}. Waiting: {waiting}.\n\n"
         f"{cmd('verify')} on · off\n"
         f"{cmd('unverified')} — who has not tapped yet\n"
         f"{cmd('verify')} time 5m\n"
-        f"{cmd('verify')} bots ban · {cmd('verify')} bots kick\n"
+        f"{cmd('verify')} bots allow  (default — keep bots you add)\n"
         f"{cmd('verify')} pass @user — skip the button\n"
         f"{cmd('verify')} kickall confirm"
     )

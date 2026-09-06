@@ -96,11 +96,14 @@ async def protected_ids(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> set
 async def _maybe_raidmode_ban(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
-    user_id: int,
+    user,
 ) -> bool:
     until = db.get_raid_until(chat_id)
     if until <= int(time.time()):
         return False
+    if user.is_bot:
+        return False
+    user_id = user.id
     if is_immune(user_id, chat_id) or user_id == context.bot.id:
         return False
     if user_id in await cached_admin_ids(context, chat_id):
@@ -140,7 +143,7 @@ async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if user.is_bot and user.id == context.bot.id:
             continue
         _record_join(chat.id, user.id, is_bot=user.is_bot)
-        banned = await _maybe_raidmode_ban(context, chat.id, user.id)
+        banned = await _maybe_raidmode_ban(context, chat.id, user)
         if banned:
             banned_any = True
         await on_user_joined(context, chat, user, banned=banned)
@@ -163,7 +166,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     new_status = result.new_chat_member.status
     if new_status in _IN_CHAT and old_status not in _IN_CHAT:
         _record_join(chat.id, user.id, is_bot=user.is_bot)
-        banned = await _maybe_raidmode_ban(context, chat.id, user.id)
+        banned = await _maybe_raidmode_ban(context, chat.id, user)
         await on_user_joined(context, chat, user, banned=banned)
     elif old_status in _IN_CHAT and new_status not in _IN_CHAT:
         db.forget_member(chat.id, user.id)

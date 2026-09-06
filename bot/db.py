@@ -961,15 +961,30 @@ def set_verify_secs(chat_id: int, seconds: int) -> None:
     _set_setting(chat_id, "verify_secs", max(60, min(3600, seconds)))
 
 
-def verify_ban_bots(chat_id: int) -> bool:
+def verify_bot_policy(chat_id: int) -> str:
+    """allow | kick | ban. Default is allow (keep Telegram bots you add)."""
     raw = _get_setting(chat_id, "verify_ban_bots")
     if raw is None:
-        return True
-    return bool(int(raw))
+        return "allow"
+    value = int(raw)
+    if value == 1:
+        return "ban"
+    if value == 0:
+        return "kick"
+    return "allow"
+
+
+def set_verify_bot_policy(chat_id: int, policy: str) -> None:
+    code = {"ban": 1, "kick": 0, "allow": 2}.get(policy, 2)
+    _set_setting(chat_id, "verify_ban_bots", code)
+
+
+def verify_ban_bots(chat_id: int) -> bool:
+    return verify_bot_policy(chat_id) == "ban"
 
 
 def set_verify_ban_bots(chat_id: int, ban: bool) -> None:
-    _set_setting(chat_id, "verify_ban_bots", int(ban))
+    set_verify_bot_policy(chat_id, "ban" if ban else "kick")
 
 
 def add_pending_verify(

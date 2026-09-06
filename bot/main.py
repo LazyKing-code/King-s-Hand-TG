@@ -15,7 +15,6 @@ from telegram.ext import (
     Application,
     CallbackQueryHandler,
     ChatMemberHandler,
-    CommandHandler,
     MessageHandler,
     filters,
 )
@@ -220,7 +219,7 @@ def main() -> None:
 
     db.init()
     app = Application.builder().token(BOT_TOKEN).post_init(on_startup).post_shutdown(on_shutdown).build()
-    app.add_handler(CommandHandler("start", start))
+    add_cmd(app, "start", start)
     add_cmd(app, "help", cmd_help, private_slash=True)
     add_cmd(app, ["whatsnew", "changelog"], cmd_whatsnew, private_slash=True)
     add_cmd(app, "release", cmd_release)

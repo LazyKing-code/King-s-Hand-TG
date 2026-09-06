@@ -33,7 +33,9 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     asked = bool(msg.reply_to_message) or bool(context.args)
     if msg.entities:
         asked = asked or any(
-            e.type in {"mention", "text_mention"} for e in msg.entities
+            (e.type == "text_mention" and e.user)
+            or (e.type == "mention" and e.offset > 0)
+            for e in msg.entities
         )
     target = await resolve_target(update, context)
     looking_up_other = bool(target) and target.id != actor.id

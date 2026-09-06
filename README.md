@@ -63,7 +63,7 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | Command | What it does |
 |---|---|
 | `/welcome` | Custom join message (`{user}` `{name}` `{id}` `{chat}` `{count}`). `on` / `off` / `reset`. Reply to a photo to use it. |
-| `/verify` | Join captcha (on by default). `/unverified` lists who has not tapped yet. Bots are banned on join. |
+| `/verify` | Join captcha (on by default). `/unverified` lists who has not tapped yet. Telegram bots you add are kept; fake/spam accounts must tap the button. |
 | `/goodbye` | Leave message (not after a ban) |
 | `/cleanservice on` | Delete Telegram join/leave service messages |
 | `/rules` · `/setrules` | Show / set group rules |

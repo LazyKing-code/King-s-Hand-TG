@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType
@@ -15,39 +16,89 @@ from bot.invite import bot_username, url_buttons
 
 log = logging.getLogger(__name__)
 
-# Bump this string when you ship a new note. Each id is sent once per user.
-RELEASE_ID = "2026-09-06"
-RELEASE_TITLE = "September 2026"
+# Add a new entry at the bottom when you ship. The last id is broadcast once.
+_NOTES: list[dict] = [
+    {
+        "id": "2026-09-06.4",
+        "date": "6 September 2026",
+        "headline": "Commands, joins, and sticker reports",
+        "intro": (
+            "This release tightens everyday group behaviour. "
+            "Only what changed is listed below."
+        ),
+        "sections": [
+            (
+                "Command menu",
+                "Tapping a suggestion such as /help in a group now runs correctly "
+                "when Telegram inserts the bot username (/help@BotName).",
+            ),
+            (
+                "Telegram bots",
+                "Bots you add from BotFather are no longer kicked on join. "
+                "Join verification still applies to people. "
+                "Raidmode still stops flood joins, not official bots.",
+            ),
+            (
+                "Member status",
+                f"{cmd('stats')} (reply or @username) now shows immune, trusted, "
+                "approved, and sticker warnings as separate fields.",
+            ),
+            (
+                "Sticker reports",
+                f"A {cmd('report')} now bans that sticker and its pack, and is "
+                "enforced for members and admins. "
+                f"Only the owner can {cmd('unreport')} or {cmd('unreportall')} confirm. "
+                "Removal notices tag the sender; rapid spam is grouped into one message.",
+            ),
+            (
+                "Admin demote",
+                "Three banned-sticker warnings still demote an admin this bot promoted "
+                f"with {cmd('makeadmin')}. The next banned sticker after that is a kick.",
+            ),
+        ],
+    },
+]
 
 
-def release_html() -> str:
-    return (
-        "<b>King's Hand</b>\n"
-        f"<i>Official update · {RELEASE_TITLE}</i>\n"
-        "━━━━━━━━━━━━━━\n\n"
-        "Thank you for adding me. This note is for people who opened a private "
-        "chat with the bot.\n\n"
-        "<b>1. Commands are the normal names now</b>\n"
-        "Use <code>/help</code>, <code>/kick</code>, <code>/ban</code>, "
-        "<code>/lock</code> — there is no <code>kh_</code> prefix anymore.\n"
-        "If Rose is still in the group, remove it so both bots do not answer "
-        "the same command.\n\n"
-        "<b>2. Everyday group tools</b>\n"
-        "Welcome and goodbye, join verify, rules, notes, filters, warns, "
-        "mute / ban, pin, purge, lock, and anti-flood — in this bot.\n\n"
-        "<b>3. Games in the group</b>\n"
-        "Toss, dice, lucky 7, stone-paper-scissors, and hand cricket "
-        "(vs a friend). Daily streak and a leaderboard.\n"
-        f"<blockquote>{cmd('daily')} · {cmd('gamehelp')} · {cmd('top')} · "
-        f"{cmd('cricket')} @user</blockquote>\n"
-        "Coins are for fun only. Nothing is real money.\n\n"
-        "<b>4. Stickers</b>\n"
-        "NSFW pack detection is unchanged. Reply to a sticker with "
-        f"<code>{cmd('report')}</code> to ban a pack. "
-        f"<code>{cmd('packs')}</code> lists them — tap Allow to undo.\n\n"
-        f"In the group, send <code>{cmd('help')}</code> for commands that match "
-        "your role. This message stays in our private chat."
+def current_note() -> dict:
+    return _NOTES[-1]
+
+
+RELEASE_ID = current_note()["id"]
+
+
+def _section_html(title: str, body: str) -> str:
+    return f"<b>{escape(title)}</b>\n{escape(body)}"
+
+
+def release_html(note: dict | None = None) -> str:
+    note = note or current_note()
+    parts = [
+        "<b>King's Hand</b> · Release notes",
+        f"<i>{escape(note['date'])} · {escape(note['headline'])}</i>",
+        "",
+        escape(note["intro"]),
+        "",
+    ]
+    for title, body in note["sections"]:
+        parts.append(_section_html(title, body))
+        parts.append("")
+    parts.append(
+        f"In the group, send {cmd('help')} for commands that match your role. "
+        f"Earlier notes: {cmd('whatsnew')} history."
     )
+    return "\n".join(parts).strip()
+
+
+def history_html() -> str:
+    lines = ["<b>King's Hand</b> · Previous releases", ""]
+    for note in reversed(_NOTES):
+        lines.append(f"<b>{escape(note['date'])}</b> — {escape(note['headline'])}")
+        for title, _body in note["sections"]:
+            lines.append(f"• {escape(title)}")
+        lines.append("")
+    lines.append(f"Latest detail: {cmd('whatsnew')}")
+    return "\n".join(lines).strip()
 
 
 def _notes_markup(username: str | None) -> InlineKeyboardMarkup:
@@ -63,10 +114,11 @@ def _notes_markup(username: str | None) -> InlineKeyboardMarkup:
 
 
 async def send_release_card(bot, user_id: int, username: str | None) -> bool:
+    html = release_html()
     try:
         await bot.send_message(
             user_id,
-            release_html(),
+            html,
             parse_mode="HTML",
             reply_markup=_notes_markup(username),
             disable_web_page_preview=True,
@@ -81,7 +133,7 @@ async def send_release_card(bot, user_id: int, username: str | None) -> bool:
         try:
             await bot.send_message(
                 user_id,
-                release_html(),
+                html,
                 parse_mode="HTML",
                 reply_markup=_notes_markup(username),
                 disable_web_page_preview=True,
@@ -148,9 +200,12 @@ async def cmd_whatsnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if chat.type == ChatType.PRIVATE:
         db.touch_bot_user(user.id)
     username = await bot_username(context)
+    args = [a.lower() for a in (context.args or [])]
+    show_history = bool(args and args[0] in {"history", "all", "archive"})
+    html = history_html() if show_history else release_html()
     await msg.reply_html(
-        release_html(),
-        reply_markup=_notes_markup(username),
+        html,
+        reply_markup=None if show_history else _notes_markup(username),
         disable_web_page_preview=True,
     )
     if chat.type == ChatType.PRIVATE:
@@ -176,10 +231,10 @@ async def cmd_release(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             disable_web_page_preview=True,
         )
         await msg.reply_text(
-            f"Preview above. {n} people have not received this note yet "
-            f"({total} known starters).\n"
+            f"Preview of {RELEASE_ID}. {n} people have not received this note yet "
+            f"({total} known private chats).\n"
             f"{cmd('release')} send — deliver in private chat\n"
-            f"Anyone can read it with {cmd('whatsnew')}"
+            f"{cmd('whatsnew')} · {cmd('whatsnew')} history"
         )
         return
     if args[0] != "send":
