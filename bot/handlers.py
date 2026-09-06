@@ -13,6 +13,7 @@ from bot import db
 from bot.commands import cmd, cmd_name
 from bot.config import OWNER_IDS
 from bot.invite import ADD_TEXT, bot_username, pick_keyboard, url_buttons
+from bot.release import deliver_if_needed
 from bot.moderation import (
     DEFAULT_KICK_MSG,
     announce_kick,
@@ -66,7 +67,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             + extra
         )
         return
+    if not user:
+        return
+    db.touch_bot_user(user.id)
     username = await bot_username(context)
+    payload = (context.args[0].lower() if context.args else "")
+    if payload in {"notes", "whatsnew", "update"}:
+        await deliver_if_needed(user.id, context.bot, username)
+        return
     await update.effective_message.reply_html(
         "<b>King's Hand</b>\n"
         "I keep the group in order — stickers, spam, whispers, and the occasional scolding.\n\n"
@@ -80,6 +88,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Or pick a chat you already admin:",
         reply_markup=pick_keyboard(),
     )
+    await deliver_if_needed(user.id, context.bot, username)
 
 
 async def on_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

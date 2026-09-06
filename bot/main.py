@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 
@@ -102,6 +103,7 @@ from bot.notes import (
     on_triggers,
 )
 from bot.raid import cmd_joins, cmd_purgejoins, cmd_raidmode, on_chat_member, on_new_members
+from bot.release import cmd_release, cmd_whatsnew, maybe_broadcast_on_startup
 from bot.tag import cmd_tag
 from bot.tagall import cmd_notag, cmd_tagall, cmd_tagme, on_seen, on_tagall_callback
 from bot.welcome import (
@@ -140,6 +142,7 @@ _MEMBER_COMMANDS = [
     ("gamehelp", "How to play games"),
     ("daily", "Daily game bonus"),
     ("top", "Game leaderboard"),
+    ("whatsnew", "Latest official update"),
     ("stats", "Your status in this group"),
     ("notag", "Skip group pings"),
     ("tagme", "Include me in pings"),
@@ -182,7 +185,15 @@ async def on_startup(app: Application) -> None:
     )
     log.info("Commands ready (e.g. %s)", cmd("help"))
     await schedule_pending_jobs(app)
-    app.create_task(daily_zombies_loop(app))
+    app.bot_data["zombies_task"] = asyncio.create_task(daily_zombies_loop(app))
+    app.bot_data["release_task"] = asyncio.create_task(maybe_broadcast_on_startup(app))
+
+
+async def on_shutdown(app: Application) -> None:
+    for key in ("zombies_task", "release_task"):
+        task = app.bot_data.get(key)
+        if task:
+            task.cancel()
 
 
 def main() -> None:
@@ -190,9 +201,11 @@ def main() -> None:
         sys.exit("Set BOT_TOKEN in .env (see .env.example)")
 
     db.init()
-    app = Application.builder().token(BOT_TOKEN).post_init(on_startup).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(on_startup).post_shutdown(on_shutdown).build()
     app.add_handler(CommandHandler("start", start))
     add_cmd(app, "help", cmd_help, private_slash=True)
+    add_cmd(app, ["whatsnew", "changelog"], cmd_whatsnew, private_slash=True)
+    add_cmd(app, "release", cmd_release)
     app.add_handler(CallbackQueryHandler(on_help_callback, pattern=r"^help:"))
     app.add_handler(CallbackQueryHandler(on_whisper_callback, pattern=r"^w:"))
     app.add_handler(CallbackQueryHandler(on_tagall_callback, pattern=r"^ta:"))
@@ -303,7 +316,10 @@ def main() -> None:
         group=2,
     )
     log.info("Bot starting")
-    app.run_polling(allowed_updates=["message", "chat_member", "callback_query"])
+    app.run_polling(
+        allowed_updates=["message", "chat_member", "callback_query"],
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
