@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from telegram import MessageEntity, Update
-from telegram.ext import Application, BaseHandler, ContextTypes, filters
+from telegram.ext import Application, BaseHandler, filters
 
 from bot.config import COMMAND_PREFIX
 
@@ -61,7 +61,7 @@ def parse_slash_command(update: Update, bot_username: str | None) -> ParsedComma
     return ParsedCommand(command=command, args=args)
 
 
-class SlashCommandHandler(BaseHandler[Update, ContextTypes.DEFAULT_TYPE]):
+class SlashCommandHandler(BaseHandler):
     """Like CommandHandler, but /help@BotName always reaches this bot."""
 
     def __init__(self, commands: list[str], callback, *, extra_filter=None):
