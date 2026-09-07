@@ -36,7 +36,7 @@ def apply_ball(ch: dict) -> str:
         key = "score_a" if batter == ch["a"] else "score_b"
         ch[key] = int(ch.get(key) or 0) + bat_n
         ch["balls"] = played
-        ch["last"] = f"+{bat_n} runs  (you {bat_n} · they {bowl_n})"
+        ch["last"] = f"+{bat_n} runs ({bat_n} vs {bowl_n})"
     ch["event"] = ch["last"]
 
     chase_score = int((ch["score_a"] if batter == ch["a"] else ch["score_b"]) or 0)

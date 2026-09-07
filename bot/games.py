@@ -23,7 +23,7 @@ from bot.commands import cmd
 from bot.arcade import on_four_drop, on_penalty_pick, on_vault_pick, start_four, start_penalty, start_vault
 from bot.fun import resolve_member
 from bot.cricket import apply_ball, both_picked, record_pick
-from bot.gameui import png_file, render_cricket, render_duel, render_result, send_or_edit_card
+from bot.gameui import png_file, render_duel, render_result, send_or_edit_card
 from bot.moderation import format_user, mention, require_group
 
 log = logging.getLogger(__name__)
@@ -515,10 +515,8 @@ async def cmd_cricket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         rival,
         kind="cricket",
         text=(
-            f"{mention(actor)} vs {mention(rival)}\n"
-            "<b>Hand cricket</b> — 6 balls each, or until OUT.\n"
-            "Both pick 1–6 each ball. Same number = wicket.\n"
-            "The challenger bats first. Chase ends as soon as the target is passed."
+            f"{mention(actor)} vs {mention(rival)} — <b>hand cricket</b>\n"
+            "Tap Accept. Both pick 1–6 each ball. Same number = out."
         ),
     )
 
@@ -728,8 +726,8 @@ async def _on_accept(query, context, cid: str, ch: dict, user: User) -> None:
         return
     if kind == "cricket":
         await query.answer("You bat second. Challenger bats first.")
-        ch["last"] = "Both tap 1–6. Same number is out."
-        ch["waiting"] = "Challenger bats. One tap each per ball."
+        ch["last"] = "Same number = out."
+        ch["waiting"] = "Challenger bats first. Both tap 1–6."
         ch["picks"] = {}
         ch["event"] = ch["last"]
         _save_match(cid, ch)
@@ -755,45 +753,72 @@ async def _edit_html(query, text: str, markup=None) -> None:
             reply_markup=markup,
             disable_web_page_preview=True,
         )
+        return
     except BadRequest:
         pass
+    try:
+        await query.edit_message_caption(
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+        return
+    except BadRequest:
+        pass
+    if query.message:
+        await query.get_bot().send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except BadRequest:
+            pass
+
+
+async def _cricket_text(context, ch: dict, *, over: bool = False, winner: str = "") -> str:
+    chat_id = ch["chat_id"]
+    a_n = escape(await _short_name(context, chat_id, ch["a"]))
+    b_n = escape(await _short_name(context, chat_id, ch["b"]))
+    bat = a_n if ch["batter"] == ch["a"] else b_n
+    sa, sb = int(ch.get("score_a") or 0), int(ch.get("score_b") or 0)
+    innings = int(ch.get("innings") or 1)
+    ball = min(int(ch.get("balls") or 0) + 1, 6)
+    first = ch.get("first_innings")
+    if over:
+        lines = [
+            "<b>Hand cricket — over</b>",
+            f"{a_n}  <b>{sa}</b>",
+            f"{b_n}  <b>{sb}</b>",
+            "",
+            winner,
+        ]
+        last = ch.get("last")
+        if last:
+            lines.append(f"<i>{escape(str(last))}</i>")
+        return "\n".join(lines)
+    if innings == 2 and first is not None:
+        need = max(0, int(first) + 1 - (sb if ch["batter"] == ch["b"] else sa))
+        head = f"<b>Hand cricket</b> — chase · ball {ball}/6 · need {need}"
+    else:
+        head = f"<b>Hand cricket</b> — 1st innings · ball {ball}/6"
+    last = ch.get("last") or "Same number = out."
+    wait = ch.get("waiting") or "Both tap 1–6."
+    return (
+        f"{head}\n"
+        f"Batting: {bat}\n"
+        f"{a_n}  {sa}     {b_n}  {sb}\n\n"
+        f"{escape(str(last))}\n"
+        f"<i>{escape(str(wait))}</i>"
+    )
 
 
 async def _show_cricket(query, context, cid: str, ch: dict, *, markup=None) -> None:
-    chat_id = ch["chat_id"]
-    name_a = await _short_name(context, chat_id, ch["a"])
-    name_b = await _short_name(context, chat_id, ch["b"])
-    first = ch.get("first_innings")
-    now_ball = int(ch.get("balls") or 0) + 1
-    png = render_cricket(
-        name_a=name_a,
-        name_b=name_b,
-        score_a=int(ch["score_a"] or 0),
-        score_b=int(ch["score_b"] or 0),
-        batter_is_a=ch["batter"] == ch["a"],
-        innings=int(ch["innings"] or 1),
-        ball=now_ball,
-        target=None if first is None else int(first),
-        last=ch.get("last") or ch.get("event") or "",
-        waiting=ch.get("waiting") or "Both tap 1–6.",
-    )
-    try:
-        mid = await send_or_edit_card(
-            query,
-            png,
-            "Hand cricket",
-            markup,
-            edit_message_id=ch.get("card_msg_id"),
-        )
-    except Exception:
-        log.exception("cricket card send failed")
-        return
-    if mid:
-        live = _get_match(cid)
-        if not live:
-            return
-        live["card_msg_id"] = mid
-        _save_match(cid, live)
+    text = await _cricket_text(context, ch)
+    await _edit_html(query, text, markup)
 
 
 async def _finish_cricket(query, context, cid: str, ch: dict, event: str) -> None:
@@ -802,51 +827,25 @@ async def _finish_cricket(query, context, cid: str, ch: dict, event: str) -> Non
     except Exception:
         pass
     chat_id = ch["chat_id"]
-    sa, sb = ch["score_a"], ch["score_b"]
+    sa, sb = int(ch.get("score_a") or 0), int(ch.get("score_b") or 0)
     a_m = await format_user(context, chat_id, ch["a"])
     b_m = await format_user(context, chat_id, ch["b"])
-    name_a = await _short_name(context, chat_id, ch["a"])
-    name_b = await _short_name(context, chat_id, ch["b"])
     if sa > sb:
         _award(chat_id, ch["a"], 40, win=True, kind="cricket")
         _award(chat_id, ch["b"], 12, win=False, kind="cricket")
-        headline = f"{name_a} wins"
-        detail = f"{sa} – {sb}   ·   {event}"
         winner = f"{a_m} wins"
     elif sb > sa:
         _award(chat_id, ch["b"], 40, win=True, kind="cricket")
         _award(chat_id, ch["a"], 12, win=False, kind="cricket")
-        headline = f"{name_b} wins"
-        detail = f"{sb} – {sa}   ·   {event}"
         winner = f"{b_m} wins"
     else:
         _award(chat_id, ch["a"], 20, win=None, kind="cricket")
         _award(chat_id, ch["b"], 20, win=None, kind="cricket")
-        headline = "Match tied"
-        detail = f"{sa} – {sb}   ·   {event}"
         winner = "Tie — both +20"
-    png = render_result(title="Hand cricket", headline=headline, detail=detail, accent=(34, 140, 90, 255))
-    card_id = ch.get("card_msg_id")
+    ch["last"] = event
+    text = await _cricket_text(context, ch, over=True, winner=winner)
     _end_match(cid)
-    await send_or_edit_card(
-        query,
-        png,
-        "Hand cricket — match over",
-        None,
-        edit_message_id=card_id,
-    )
-
-
-async def _cricket_scoreboard(context, ch: dict) -> str:
-    a_m = await format_user(context, ch["chat_id"], ch["a"])
-    b_m = await format_user(context, ch["chat_id"], ch["b"])
-    bat_m = a_m if ch["batter"] == ch["a"] else b_m
-    who = "first innings" if ch["innings"] == 1 else "chase"
-    return (
-        f"<b>Hand cricket</b> — {who}, ball {min(ch['balls'] + 1, 6)}/6\n"
-        f"Batting: {bat_m}\n"
-        f"{a_m} {ch['score_a']}  ·  {b_m} {ch['score_b']}"
-    )
+    await _edit_html(query, text, None)
 
 
 async def _run_dice_duel(query, context, ch: dict) -> None:
@@ -1004,7 +1003,11 @@ async def _on_cricket_pick(query, context, cid, ch, user, n: int) -> None:
     if status == "wait":
         other = ch["b"] if user.id == ch["a"] else ch["a"]
         other_n = await _short_name(context, ch["chat_id"], other)
+        you = await _short_name(context, ch["chat_id"], user.id)
+        ch["waiting"] = f"{you} locked. Waiting for {other_n}."
+        _save_match(cid, ch)
         await query.answer(f"Locked {n}. Waiting for {other_n}.")
+        await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
         return
     await _resolve_cricket_ball(query, context, cid, ch)
 
@@ -1093,13 +1096,11 @@ def _help_pages() -> dict[str, str]:
         ),
         "cricket": (
             "<b>Hand cricket</b>\n"
-            "One board. Both tap 1–6 each ball.\n\n"
+            "Plain text. One message, numbers 1–6.\n\n"
             f"Reply {cmd('cricket')} or {cmd('cricket')} @username.\n\n"
-            "• Challenger bats first, 6 balls\n"
-            "• Different numbers → batter scores their number\n"
-            "• Same number → out, innings over\n"
-            "• Other side needs that total + 1 to win\n"
-            "• Chase stops as soon as they pass the target\n\n"
+            "• Challenger bats first\n"
+            "• Both tap a number each ball. Same = out\n"
+            "• Other side needs that score + 1\n\n"
             "Winner +40, other +12, tie +20."
         ),
         "four": (
