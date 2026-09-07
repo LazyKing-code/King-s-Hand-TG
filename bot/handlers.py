@@ -37,7 +37,10 @@ from bot.nsfw import is_nsfw_sticker
 
 log = logging.getLogger(__name__)
 
-TARGET_HINT = "Reply to them, or mention them."
+TARGET_HINT = (
+    "Reply to them, mention @username, or use their numeric id. "
+    "Usernames work after I have seen that person in the group."
+)
 _PENDING_LOG: dict[int, int] = {}
 _REPORT_WINDOW = 6.0
 _report_batch: dict[int, dict] = {}

@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 
 from bot import db
 from bot.commands import cmd
-from bot.moderation import mention, require_group
+from bot.moderation import mention, require_group, resolve_target
 
 log = logging.getLogger(__name__)
 
@@ -30,37 +30,21 @@ async def _target_and_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if reply and reply.from_user and not reply.from_user.is_bot:
         return reply.from_user, _after_command(update)
 
-    if msg.entities:
-        for entity in msg.entities:
-            if entity.type == "text_mention" and entity.user:
-                body = text[entity.offset + entity.length :].strip()
-                return entity.user, body
-            if entity.type == "mention":
-                uname = text[entity.offset : entity.offset + entity.length]
-                body = text[entity.offset + entity.length :].strip()
-                try:
-                    chat = await context.bot.get_chat(uname)
-                    user = User(
-                        id=chat.id,
-                        first_name=chat.first_name or uname,
-                        is_bot=False,
-                        username=chat.username,
-                    )
-                    return user, body
-                except Exception:
-                    pass
+    target = await resolve_target(update, context)
+    if not target:
+        return None, ""
+
+    last_end = 0
+    for entity in msg.entities or []:
+        if entity.type in {"text_mention", "mention"}:
+            last_end = max(last_end, entity.offset + entity.length)
+    if last_end:
+        return target, text[last_end:].strip()
 
     args = list(context.args or [])
-    if args and args[0].lstrip("-").isdigit():
-        uid = int(args[0])
-        body = " ".join(args[1:]).strip()
-        chat = update.effective_chat
-        try:
-            member = await context.bot.get_chat_member(chat.id, uid)
-            return member.user, body
-        except Exception:
-            return User(id=uid, first_name=str(uid), is_bot=False), body
-    return None, ""
+    if args and (args[0].startswith("@") or args[0].lstrip("-").isdigit()):
+        return target, " ".join(args[1:]).strip()
+    return target, _after_command(update)
 
 
 async def cmd_whisper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

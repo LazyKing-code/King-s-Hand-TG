@@ -9,6 +9,7 @@ from telegram import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeDefault,
+    Update,
 )
 from telegram.error import Conflict
 from telegram.ext import (
@@ -16,6 +17,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ChatMemberHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -30,11 +32,14 @@ from bot.games import (
     cmd_cricket,
     cmd_daily,
     cmd_dice,
+    cmd_four,
     cmd_gamehelp,
     cmd_lucky7,
+    cmd_penalty,
     cmd_rps,
     cmd_top,
     cmd_toss,
+    cmd_vault,
     on_game_callback,
 )
 from bot.handlers import (
@@ -92,6 +97,7 @@ from bot.groupmod import (
 from bot.help import cmd_help, on_help_callback
 from bot.invite import on_chat_shared
 from bot.lock import cmd_lock, cmd_unlock
+from bot.moderation import remember_from_update
 from bot.notes import (
     cmd_blacklist,
     cmd_clear,
@@ -143,6 +149,9 @@ _MEMBER_COMMANDS = [
     ("scold", "Playful scolding"),
     ("gamehelp", "How to play games"),
     ("daily", "Daily game bonus"),
+    ("four", "Four in a row vs someone"),
+    ("penalty", "Penalty duel vs someone"),
+    ("vault", "Share or take the pot"),
     ("top", "Game leaderboard"),
     ("whatsnew", "Latest official update"),
     ("stats", "Your status in this group"),
@@ -219,6 +228,7 @@ def main() -> None:
 
     db.init()
     app = Application.builder().token(BOT_TOKEN).post_init(on_startup).post_shutdown(on_shutdown).build()
+    app.add_handler(TypeHandler(Update, remember_from_update, block=False), group=-2)
     add_cmd(app, "start", start)
     add_cmd(app, "help", cmd_help, private_slash=True)
     add_cmd(app, ["whatsnew", "changelog"], cmd_whatsnew, private_slash=True)
@@ -244,6 +254,9 @@ def main() -> None:
     add_cmd(app, ["lucky7", "7up"], cmd_lucky7)
     add_cmd(app, ["rps", "sps"], cmd_rps)
     add_cmd(app, "cricket", cmd_cricket)
+    add_cmd(app, ["four", "connect4"], cmd_four)
+    add_cmd(app, ["penalty", "pk"], cmd_penalty)
+    add_cmd(app, ["vault", "heist"], cmd_vault)
     add_cmd(app, ["stats", "who", "user"], cmd_stats)
     add_cmd(app, ["tag", "nick"], cmd_tag)
     add_cmd(app, "tagall", cmd_tagall)

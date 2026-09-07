@@ -57,6 +57,58 @@ _NOTES: list[dict] = [
             ),
         ],
     },
+    {
+        "id": "2026-09-07.1",
+        "date": "7 September 2026",
+        "headline": "Hand cricket and game cards",
+        "intro": (
+            "This update is about match rules and how games look in the group. "
+            "Only what changed is listed below."
+        ),
+        "sections": [
+            (
+                "Hand cricket",
+                "If you are out for 0, the other side only needs 1 to win. "
+                "The chase now ends as soon as that target is passed — they do not keep batting to 18. "
+                "Your number locks for that ball and cannot be changed.",
+            ),
+            (
+                "Scoreboard cards",
+                "Cricket, toss, lucky 7, and duels post a graphic card with both player names, "
+                "score, and who is batting.",
+            ),
+        ],
+    },
+    {
+        "id": "2026-09-07.2",
+        "date": "7 September 2026",
+        "headline": "New games and per-game boards",
+        "intro": (
+            "Three new two-player games, and a wins/losses board for each game. "
+            "Only what changed is listed below."
+        ),
+        "sections": [
+            (
+                "Four in a row",
+                f"{cmd('four')} @username — a visible board. Drop in columns 1–7. "
+                "First to four in a line wins.",
+            ),
+            (
+                "Penalty duel",
+                f"{cmd('penalty')} — five kicks each. Shooter and keeper pick Left, Centre, or Right. "
+                "Same side is a save.",
+            ),
+            (
+                "The vault",
+                f"{cmd('vault')} — both lock Share or Take. Split, steal, or both walk away empty.",
+            ),
+            (
+                "Per-game leaderboard",
+                f"{cmd('top')} cricket, {cmd('top')} four, {cmd('top')} penalty, and the other games "
+                f"show wins, losses, and draws. {cmd('balance')} lists your line for each.",
+            ),
+        ],
+    },
 ]
 
 

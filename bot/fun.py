@@ -7,7 +7,7 @@ from telegram import Update, User
 from telegram.ext import ContextTypes
 
 from bot.commands import cmd
-from bot.moderation import mention, require_group
+from bot.moderation import mention, require_group, resolve_target
 
 log = logging.getLogger(__name__)
 
@@ -58,38 +58,7 @@ def _next_scold(chat_id: int) -> str:
 
 
 async def resolve_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> User | None:
-    msg = update.effective_message
-    if not msg:
-        return None
-    reply = msg.reply_to_message
-    if reply and reply.from_user and not reply.from_user.is_bot:
-        return reply.from_user
-    text = msg.text or msg.caption or ""
-    if msg.entities:
-        for entity in msg.entities:
-            if entity.type == "text_mention" and entity.user:
-                return entity.user
-            if entity.type == "mention":
-                uname = text[entity.offset : entity.offset + entity.length]
-                try:
-                    chat = await context.bot.get_chat(uname)
-                    return User(
-                        id=chat.id,
-                        first_name=chat.first_name or uname,
-                        is_bot=False,
-                        username=chat.username,
-                    )
-                except Exception:
-                    log.exception("scold username lookup failed")
-    args = list(context.args or [])
-    if args and args[0].lstrip("-").isdigit():
-        uid = int(args[0])
-        try:
-            member = await context.bot.get_chat_member(update.effective_chat.id, uid)
-            return member.user
-        except Exception:
-            return User(id=uid, first_name=str(uid), is_bot=False)
-    return None
+    return await resolve_target(update, context)
 
 
 async def cmd_scold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

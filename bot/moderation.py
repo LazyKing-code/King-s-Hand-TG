@@ -590,6 +590,62 @@ async def apply_punishment(
 _SKIP_USER_IDS = {777000, 1087968824}  # Telegram / Group Anonymous Bot
 
 
+def _user_from_seen_row(row: dict) -> User:
+    return User(
+        id=int(row["user_id"]),
+        is_bot=bool(row["is_bot"]),
+        first_name=row["first_name"] or str(row["user_id"]),
+        last_name=row["last_name"] or None,
+        username=row["username"] or None,
+    )
+
+
+def _users_in_update(update: Update) -> list[User]:
+    found: dict[int, User] = {}
+
+    def add(user: User | None) -> None:
+        if user and user.id:
+            found[user.id] = user
+
+    add(update.effective_user)
+    msg = update.effective_message
+    if msg:
+        add(msg.from_user)
+        add(getattr(msg, "forward_from", None))
+        origin = getattr(msg, "forward_origin", None)
+        add(getattr(origin, "sender_user", None))
+        add(msg.left_chat_member)
+        if msg.reply_to_message:
+            add(msg.reply_to_message.from_user)
+            add(getattr(msg.reply_to_message, "forward_from", None))
+        for user in msg.new_chat_members or []:
+            add(user)
+        for entity in tuple(msg.entities or ()) + tuple(msg.caption_entities or ()):
+            if entity.user:
+                add(entity.user)
+    if update.chat_member:
+        add(update.chat_member.new_chat_member.user)
+        add(update.chat_member.old_chat_member.user)
+    if update.callback_query:
+        add(update.callback_query.from_user)
+    return list(found.values())
+
+
+async def remember_from_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Index every user Telegram sends us. Bots cannot look up @username otherwise."""
+    for user in _users_in_update(update):
+        db.remember_user(user)
+    chat = update.effective_chat
+    user = update.effective_user
+    if (
+        chat
+        and user
+        and not user.is_bot
+        and chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
+    ):
+        db.touch_member(chat.id, user.id)
+
+
 async def _user_from_username(
     context: ContextTypes.DEFAULT_TYPE,
     username: str,
@@ -600,9 +656,20 @@ async def _user_from_username(
         return None
     if context.bot.username and needle == context.bot.username.lower():
         return None
+    cached = db.lookup_seen_username(needle)
+    if cached:
+        if chat_id:
+            try:
+                member = await context.bot.get_chat_member(chat_id, int(cached["user_id"]))
+                db.remember_user(member.user)
+                return member.user
+            except Exception:
+                pass
+        return _user_from_seen_row(cached)
     if chat_id:
         try:
             for admin in await context.bot.get_chat_administrators(chat_id):
+                db.remember_user(admin.user)
                 uname = admin.user.username
                 if uname and uname.lower() == needle:
                     return admin.user
@@ -614,13 +681,15 @@ async def _user_from_username(
         return None
     if info.type != ChatType.PRIVATE or not info.id:
         return None
-    return User(
+    found = User(
         id=info.id,
-        is_bot=False,
+        is_bot=bool(getattr(info, "is_bot", False)),
         first_name=info.first_name or needle,
         last_name=info.last_name,
         username=info.username,
     )
+    db.remember_user(found)
+    return found
 
 
 async def resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> User | None:
@@ -632,16 +701,21 @@ async def resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         uid = reply.from_user.id
         if uid not in _SKIP_USER_IDS:
             if not (reply.sender_chat and chat and reply.sender_chat.id == chat.id):
+                db.remember_user(reply.from_user)
                 return reply.from_user
-    if msg.entities:
-        for entity in msg.entities:
-            if entity.type == "text_mention" and entity.user:
-                return entity.user
-            if entity.type == "mention":
-                raw = (msg.text or msg.caption or "")[entity.offset : entity.offset + entity.length]
-                found = await _user_from_username(context, raw, chat_id)
-                if found:
-                    return found
+    text = msg.text or msg.caption or ""
+    entities = tuple(msg.entities or ()) + tuple(msg.caption_entities or ())
+    for entity in entities:
+        if entity.type == "bot_command":
+            continue
+        if entity.type == "text_mention" and entity.user:
+            db.remember_user(entity.user)
+            return entity.user
+        if entity.type == "mention":
+            raw = text[entity.offset : entity.offset + entity.length]
+            found = await _user_from_username(context, raw, chat_id)
+            if found:
+                return found
     args = context.args or []
     if not args:
         return None
@@ -651,8 +725,12 @@ async def resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if chat:
             try:
                 member = await context.bot.get_chat_member(chat.id, uid)
+                db.remember_user(member.user)
                 return member.user
             except Exception:
                 pass
+        cached = db.lookup_seen_id(uid)
+        if cached:
+            return _user_from_seen_row(cached)
         return User(id=uid, first_name=str(uid), is_bot=False)
     return await _user_from_username(context, raw, chat_id)

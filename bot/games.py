@@ -19,7 +19,9 @@ from telegram.ext import ContextTypes
 
 from bot import db
 from bot.commands import cmd
+from bot.arcade import on_four_drop, on_penalty_pick, on_vault_pick, start_four, start_penalty, start_vault
 from bot.fun import resolve_member
+from bot.gameui import png_file, render_cricket, render_duel, render_result, send_or_edit_card
 from bot.moderation import format_user, mention, require_group
 
 log = logging.getLogger(__name__)
@@ -29,6 +31,38 @@ _challenges: dict[str, dict] = {}
 
 RPS = {"stone": "🪨 Stone", "paper": "📄 Paper", "scissors": "✂️ Scissors"}
 RPS_WIN = {("stone", "scissors"), ("paper", "stone"), ("scissors", "paper")}
+
+KIND_LABELS = {
+    "toss": "Toss",
+    "dice": "Dice",
+    "lucky7": "Lucky 7",
+    "rps": "Stone-paper",
+    "cricket": "Hand cricket",
+    "four": "Four in a row",
+    "penalty": "Penalty duel",
+    "vault": "The vault",
+}
+KIND_ALIASES = {
+    "toss": "toss",
+    "coin": "toss",
+    "dice": "dice",
+    "lucky7": "lucky7",
+    "lucky": "lucky7",
+    "rps": "rps",
+    "sps": "rps",
+    "stone": "rps",
+    "cricket": "cricket",
+    "hand": "cricket",
+    "four": "four",
+    "connect4": "four",
+    "c4": "four",
+    "penalty": "penalty",
+    "pk": "penalty",
+    "spot": "penalty",
+    "vault": "vault",
+    "heist": "vault",
+    "split": "vault",
+}
 
 
 def _now() -> datetime:
@@ -49,9 +83,11 @@ def _yesterday() -> str:
     return (_now().date() - timedelta(days=1)).isoformat()
 
 
-def _award(chat_id: int, user_id: int, points: int, *, win: bool | None = None) -> None:
+def _award(chat_id: int, user_id: int, points: int, *, win: bool | None = None, kind: str | None = None) -> None:
     db.add_coins(chat_id, user_id, points)
     db.record_game(chat_id, user_id, points=points, win=win, day_key=_day_key(), week_key=_week_key())
+    if kind:
+        db.record_kind_game(chat_id, user_id, kind, win)
 
 
 def _new_id() -> str:
@@ -75,14 +111,14 @@ def _pending_for(chat_id: int, user_id: int) -> str | None:
     return None
 
 
-async def _need_rival(update: Update, context: ContextTypes.DEFAULT_TYPE) -> User | None:
+async def _need_rival(update: Update, context: ContextTypes.DEFAULT_TYPE, example: str = "cricket") -> User | None:
     msg = update.effective_message
     actor = update.effective_user
     rival = await resolve_member(update, context)
     if not rival or not actor:
         await msg.reply_text(
             "Reply to a friend, or tag them.\n"
-            f"Example: {cmd('cricket')} @username"
+            f"Example: {cmd(example)} @username"
         )
         return None
     if rival.id == actor.id:
@@ -98,8 +134,8 @@ def _accept_markup(cid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Haan, let's play", callback_data=f"gm:ok:{cid}"),
-                InlineKeyboardButton("Nah", callback_data=f"gm:no:{cid}"),
+                InlineKeyboardButton("✅  Accept", callback_data=f"gm:ok:{cid}"),
+                InlineKeyboardButton("✕  Decline", callback_data=f"gm:no:{cid}"),
             ]
         ]
     )
@@ -109,17 +145,18 @@ def _rps_markup(cid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🪨 Stone", callback_data=f"gm:r:{cid}:stone"),
-                InlineKeyboardButton("📄 Paper", callback_data=f"gm:r:{cid}:paper"),
-                InlineKeyboardButton("✂️ Scissors", callback_data=f"gm:r:{cid}:scissors"),
+                InlineKeyboardButton("🪨  Stone", callback_data=f"gm:r:{cid}:stone"),
+                InlineKeyboardButton("📄  Paper", callback_data=f"gm:r:{cid}:paper"),
+                InlineKeyboardButton("✂️  Scissors", callback_data=f"gm:r:{cid}:scissors"),
             ]
         ]
     )
 
 
 def _hand_markup(cid: str) -> InlineKeyboardMarkup:
-    row1 = [InlineKeyboardButton(str(n), callback_data=f"gm:c:{cid}:{n}") for n in range(1, 4)]
-    row2 = [InlineKeyboardButton(str(n), callback_data=f"gm:c:{cid}:{n}") for n in range(4, 7)]
+    faces = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥"}
+    row1 = [InlineKeyboardButton(f"{faces[n]}  {n}", callback_data=f"gm:c:{cid}:{n}") for n in range(1, 4)]
+    row2 = [InlineKeyboardButton(f"{faces[n]}  {n}", callback_data=f"gm:c:{cid}:{n}") for n in range(4, 7)]
     return InlineKeyboardMarkup([row1, row2])
 
 
@@ -127,11 +164,20 @@ def _toss_markup(cid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Heads", callback_data=f"gm:t:{cid}:heads"),
-                InlineKeyboardButton("Tails", callback_data=f"gm:t:{cid}:tails"),
+                InlineKeyboardButton("🪙  Heads", callback_data=f"gm:t:{cid}:heads"),
+                InlineKeyboardButton("🌙  Tails", callback_data=f"gm:t:{cid}:tails"),
             ]
         ]
     )
+
+
+async def _short_name(context, chat_id: int, user_id: int) -> str:
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        name = member.user.first_name or member.user.full_name or str(user_id)
+    except Exception:
+        name = str(user_id)
+    return " ".join(str(name).split())[:18]
 
 
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -145,7 +191,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     coins, streak, last = db.get_wallet(chat_id, user.id)
     if last == today:
         await update.effective_message.reply_text(
-            f"Aaj ka bonus mil chuka hai. Kal wapas aana.\n"
+            f"Today's bonus is already claimed. Come back tomorrow.\n"
             f"Streak: {streak} day(s). Coins: {coins}\n"
             f"Board: {cmd('top')}"
         )
@@ -155,9 +201,8 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db.set_wallet(chat_id, user.id, coins + gain, streak, today)
     db.record_game(chat_id, user.id, points=gain, win=None, day_key=today, week_key=_week_key())
     await update.effective_message.reply_html(
-        f"{mention(user)} claimed <b>+{gain}</b> coins. Streak <b>{streak}</b> 🔥\n"
-        f"Balance: {coins + gain}. Play {cmd('toss')} {cmd('cricket')} {cmd('rps')} — "
-        f"full guide {cmd('gamehelp')}"
+        f"{mention(user)} claimed <b>+{gain}</b> coins · streak <b>{streak}</b>\n"
+        f"Balance: {coins + gain}. Open {cmd('gamehelp')} — new: {cmd('four')} {cmd('penalty')} {cmd('vault')}."
     )
 
 
@@ -170,20 +215,34 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     st = db.get_game_stats(chat_id, user.id)
     if st["day_key"] != _day_key():
         st["day_points"] = 0
-    claimed = "haan" if last == _day_key() else f"nahi — {cmd('daily')}"
-    await update.effective_message.reply_html(
-        f"{mention(user)}\n"
-        f"Coins: <b>{coins}</b>\n"
-        f"Points: <b>{st['points']}</b> · today {st['day_points']}\n"
-        f"Wins: {st['wins']} · Losses: {st['losses']}\n"
-        f"Daily streak: {streak} · Today's bonus: {claimed}"
-    )
+    claimed = "claimed" if last == _day_key() else f"not yet — {cmd('daily')}"
+    lines = [
+        f"{mention(user)}",
+        f"Coins: <b>{coins}</b>",
+        f"Points: <b>{st['points']}</b> · today {st['day_points']}",
+        f"Wins: {st['wins']} · Losses: {st['losses']}",
+        f"Daily streak: {streak} · Today's bonus: {claimed}",
+    ]
+    by_game = db.list_kind_stats(chat_id, user.id)
+    if by_game:
+        lines.append("")
+        lines.append("<b>By game</b>")
+        for row in by_game:
+            label = KIND_LABELS.get(row["kind"], row["kind"])
+            lines.append(
+                f"• {escape(label)} — <b>{row['wins']}</b>W  {row['losses']}L  {row['draws']}D"
+            )
+    await update.effective_message.reply_html("\n".join(lines))
 
 
 async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_group(update):
         return
     args = [a.lower() for a in (context.args or [])]
+    kind = KIND_ALIASES.get(args[0]) if args else None
+    if kind:
+        await _top_kind(update, context, kind)
+        return
     if args and args[0] in {"day", "today", "aaj"}:
         field, title = "day_points", "Today (IST)"
     elif args and args[0] in {"week", "hafta"}:
@@ -200,7 +259,7 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     rows = db.list_game_top(update.effective_chat.id, field, period_key=period)
     if not rows:
         await update.effective_message.reply_text(
-            f"Board is empty. {cmd('daily')} then play {cmd('toss')} / {cmd('cricket')}."
+            f"Board is empty. {cmd('daily')} then play {cmd('four')} / {cmd('cricket')}."
         )
         return
     medals = ["🥇", "🥈", "🥉"]
@@ -209,7 +268,30 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         who = await format_user(context, update.effective_chat.id, uid)
         prefix = medals[i - 1] if i <= 3 else f"{i}."
         lines.append(f"{prefix} {who} — <b>{score}</b>")
+    games = " · ".join(cmd("top") + " " + k for k in ("cricket", "four", "penalty", "vault", "rps"))
     lines.append(f"{cmd('top')} · {cmd('top')} today · {cmd('top')} week · {cmd('top')} wins")
+    lines.append(games)
+    await update.effective_message.reply_html("\n".join(lines), disable_web_page_preview=True)
+
+
+async def _top_kind(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: str) -> None:
+    label = KIND_LABELS.get(kind, kind)
+    rows = db.list_kind_top(update.effective_chat.id, kind)
+    if not rows:
+        await update.effective_message.reply_text(
+            f"No {label} matches yet. Challenge someone with {cmd(kind)}."
+        )
+        return
+    medals = ["🥇", "🥈", "🥉"]
+    lines = [f"<b>{escape(label)}</b> — wins / losses / draws"]
+    for i, (uid, wins, losses, draws) in enumerate(rows, 1):
+        who = await format_user(context, update.effective_chat.id, uid)
+        prefix = medals[i - 1] if i <= 3 else f"{i}."
+        played = wins + losses + draws
+        lines.append(
+            f"{prefix} {who} — <b>{wins}</b>W  {losses}L  {draws}D  ({played} played)"
+        )
+    lines.append(f"{cmd('top')} cricket · {cmd('top')} four · {cmd('top')} penalty · {cmd('top')} vault")
     await update.effective_message.reply_html("\n".join(lines), disable_web_page_preview=True)
 
 
@@ -232,8 +314,8 @@ async def cmd_toss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             rival,
             kind="toss",
             text=(
-                f"{mention(actor)} ne {mention(rival)} ko toss challenge diya.\n"
-                "Dono Heads/Tails choose karo. Coin alag flip hoga."
+                f"{mention(actor)} challenged {mention(rival)} to a toss.\n"
+                "Both pick Heads or Tails. The coin flips once both have locked."
             ),
         )
         return
@@ -246,11 +328,18 @@ async def cmd_toss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     coin = random.choice(["heads", "tails"])
     win = choice == coin
     pts = 20 if win else 5
-    _award(update.effective_chat.id, actor.id, pts, win=win)
-    face = "Heads (ashrafi side)" if coin == "heads" else "Tails"
-    result = "jeet gaye ✨" if win else "thoda luck nahi tha"
-    await msg.reply_html(
-        f"🪙 {face}. You called <b>{choice}</b> — {result}. +{pts} coins"
+    _award(update.effective_chat.id, actor.id, pts, win=win, kind="toss")
+    face = "Heads" if coin == "heads" else "Tails"
+    result = "you win" if win else "not this time"
+    png = render_result(
+        title="Toss",
+        headline=face,
+        detail=f"You called {choice}. {result}  +{pts} coins",
+    )
+    await msg.reply_photo(
+        png_file(png),
+        caption=f"🪙 <b>{face}</b> — you called {choice}. +{pts} coins",
+        parse_mode="HTML",
     )
 
 
@@ -268,8 +357,8 @@ async def cmd_dice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             rival,
             kind="dice",
             text=(
-                f"{mention(actor)} vs {mention(rival)} — dice. "
-                "Accept karo, dono ke liye 🎲 roll hoga. Higher number jeetega."
+                f"{mention(actor)} vs {mention(rival)} — dice.\n"
+                "Accept, then both get a 🎲. Higher number wins."
             ),
         )
         return
@@ -281,14 +370,14 @@ async def cmd_dice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     value = sent.dice.value if sent.dice else 0
     if value == 6:
-        pts, note, win = 25, "Chhakka! 🔥", True
+        pts, note, win = 25, "Six.", True
     elif value >= 5:
         pts, note, win = 15, "Solid roll.", True
     elif value == 1:
-        pts, note, win = 5, "Ek. Phir try karo.", None
+        pts, note, win = 5, "One. Try again.", None
     else:
         pts, note, win = 8, "Okay roll.", None
-    _award(update.effective_chat.id, actor.id, pts, win=win)
+    _award(update.effective_chat.id, actor.id, pts, win=win, kind="dice")
     await update.effective_message.reply_text(f"{note} +{pts} coins. Challenge a friend: {cmd('dice')} @user")
 
 
@@ -320,18 +409,28 @@ async def cmd_lucky7(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         actual = "high"
     win = side == actual
     pts = 40 if (win and side == "seven") else (18 if win else 4)
-    _award(update.effective_chat.id, user.id, pts, win=win)
+    _award(update.effective_chat.id, user.id, pts, win=win, kind="lucky7")
     label = "LOW (2–6)" if actual == "low" else ("HIGH (8–12)" if actual == "high" else "LUCKY 7")
-    await update.effective_message.reply_html(
-        f"🎲 {a} + {b} = <b>{total}</b> → {label}\n"
-        f"You called <b>{side}</b>. {'Jeet! ' if win else 'Miss. '}+{pts} coins"
+    png = render_result(
+        title="Lucky 7",
+        headline=f"{a} + {b} = {total}",
+        detail=f"{label}  ·  you called {side}  ·  +{pts}",
+        accent=(16, 120, 80, 255),
+    )
+    await update.effective_message.reply_photo(
+        png_file(png),
+        caption=(
+            f"🎲 {a} + {b} = <b>{total}</b> → {label}\n"
+            f"You called <b>{side}</b>. {'Win. ' if win else 'Miss. '}+{pts} coins"
+        ),
+        parse_mode="HTML",
     )
 
 
 async def cmd_rps(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_group(update):
         return
-    rival = await _need_rival(update, context)
+    rival = await _need_rival(update, context, "rps")
     if not rival:
         return
     actor = update.effective_user
@@ -342,7 +441,7 @@ async def cmd_rps(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         kind="rps",
         text=(
             f"{mention(actor)} vs {mention(rival)} — Stone / Paper / Scissors.\n"
-            "Accept ke baad dono chhupke choose karo. Same = tie."
+            "Accept, then both pick in secret. Same hand is a tie."
         ),
     )
 
@@ -350,7 +449,7 @@ async def cmd_rps(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_cricket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_group(update):
         return
-    rival = await _need_rival(update, context)
+    rival = await _need_rival(update, context, "cricket")
     if not rival:
         return
     actor = update.effective_user
@@ -360,9 +459,70 @@ async def cmd_cricket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         rival,
         kind="cricket",
         text=(
-            f"{mention(actor)} vs {mention(rival)} — <b>Hand cricket</b> (school wala).\n"
-            "Har ball 1–6 choose. Same number = OUT. Warna batsman ke runs lagte hain.\n"
-            "Ek over (6 balls) each. Zyada score jeetega."
+            f"{mention(actor)} vs {mention(rival)}\n"
+            "<b>Hand cricket</b> — 6 balls each, or until OUT.\n"
+            "Both pick 1–6 each ball. Same number = wicket.\n"
+            "The challenger bats first. Chase ends as soon as the target is passed."
+        ),
+    )
+
+
+async def cmd_four(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group(update):
+        return
+    rival = await _need_rival(update, context, "four")
+    if not rival:
+        return
+    actor = update.effective_user
+    await _open_challenge(
+        update,
+        context,
+        rival,
+        kind="four",
+        text=(
+            f"{mention(actor)} vs {mention(rival)} — <b>Four in a row</b>.\n"
+            "Drop discs in columns 1–7. First to four in a line (any direction) wins.\n"
+            "Challenger drops first. Turns lock — you cannot undo a drop."
+        ),
+    )
+
+
+async def cmd_penalty(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group(update):
+        return
+    rival = await _need_rival(update, context, "penalty")
+    if not rival:
+        return
+    actor = update.effective_user
+    await _open_challenge(
+        update,
+        context,
+        rival,
+        kind="penalty",
+        text=(
+            f"{mention(actor)} vs {mention(rival)} — <b>Penalty duel</b>.\n"
+            "Five kicks each. Shooter and keeper both pick Left / Centre / Right in secret.\n"
+            "Same side = save. Different = goal. Then you swap. Sudden death if still level."
+        ),
+    )
+
+
+async def cmd_vault(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_group(update):
+        return
+    rival = await _need_rival(update, context, "vault")
+    if not rival:
+        return
+    actor = update.effective_user
+    await _open_challenge(
+        update,
+        context,
+        rival,
+        kind="vault",
+        text=(
+            f"{mention(actor)} vs {mention(rival)} — <b>The vault</b>.\n"
+            "One pot. Both lock Share or Take.\n"
+            "Both Share → split. One Take → they keep it. Both Take → empty."
         ),
     )
 
@@ -379,7 +539,7 @@ async def _open_challenge(
     chat_id = update.effective_chat.id
     if _pending_for(chat_id, actor.id) or _pending_for(chat_id, rival.id):
         await update.effective_message.reply_text(
-            "Ek match pehle se chal raha hai. Pehle usko khatam / cancel karo."
+            "A match is already running. Finish or cancel it first."
         )
         return
     cid = _new_id()
@@ -396,9 +556,11 @@ async def _open_challenge(
         "balls": 0,
         "innings": 1,
         "batter": actor.id,
+        "event": "",
+        "first_innings": None,
     }
     await update.effective_message.reply_html(
-        text + "\n<i>2 minute to accept.</i>",
+        text + "\n<i>2 minutes to accept.</i>",
         reply_markup=_accept_markup(cid),
     )
 
@@ -430,7 +592,7 @@ async def on_game_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if action == "no":
         if user.id not in (ch["a"], ch["b"]):
-            await query.answer("Yeh tumhara match nahi hai.", show_alert=True)
+            await query.answer("This is not your match.", show_alert=True)
             return
         _challenges.pop(cid, None)
         await query.answer("Challenge cancelled.")
@@ -449,12 +611,22 @@ async def on_game_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if action == "t":
         await _on_toss_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
         return
+    if action == "f":
+        col = int(parts[3]) - 1 if len(parts) > 3 and parts[3].isdigit() else -1
+        await on_four_drop(query, context, cid, ch, user, col)
+        return
+    if action == "p":
+        await on_penalty_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
+        return
+    if action == "v":
+        await on_vault_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
+        return
     await query.answer()
 
 
 async def _on_accept(query, context, cid: str, ch: dict, user: User) -> None:
     if user.id != ch["b"]:
-        await query.answer("Sirf jis ko challenge mila hai woh accept kare.", show_alert=True)
+        await query.answer("Only the person who was challenged can accept.", show_alert=True)
         return
     ch["status"] = "live"
     ch["expires"] = time.time() + 300
@@ -466,23 +638,44 @@ async def _on_accept(query, context, cid: str, ch: dict, user: User) -> None:
             _challenges.pop(cid, None)
         return
     if kind == "toss":
-        await query.answer("Toss live. Heads ya Tails choose karo.")
-        await query.edit_message_text(
-            "Dono: Heads ya Tails dabao. Coin alag flip hoga.",
-            reply_markup=_toss_markup(cid),
+        await query.answer("Call heads or tails.")
+        a_n = await _short_name(context, ch["chat_id"], ch["a"])
+        b_n = await _short_name(context, ch["chat_id"], ch["b"])
+        png = render_duel(
+            title="Toss",
+            name_a=a_n,
+            name_b=b_n,
+            line="Both call the coin. It flips once both have locked.",
+            waiting="Your call locks. You cannot change it.",
         )
+        await send_or_edit_card(query, png, f"{mention(query.from_user)} — toss is live.", _toss_markup(cid))
         return
     if kind == "rps":
-        await query.answer("Choose stone / paper / scissors — secretly.")
-        await query.edit_message_text(
-            "Dono apna haath choose karo. Dusre ko nahi dikhega jab tak dono tap na karein.",
-            reply_markup=_rps_markup(cid),
+        await query.answer("Pick stone, paper, or scissors.")
+        a_n = await _short_name(context, ch["chat_id"], ch["a"])
+        b_n = await _short_name(context, ch["chat_id"], ch["b"])
+        png = render_duel(
+            title="Stone · Paper · Scissors",
+            name_a=a_n,
+            name_b=b_n,
+            line="Secret picks. Revealed when both have locked.",
+            waiting="Tap once. Your hand is locked for this round.",
         )
+        await send_or_edit_card(query, png, "Match live. Choose below.", _rps_markup(cid))
         return
     if kind == "cricket":
-        await query.answer("Hand cricket start. Batter first over.")
-        board = await _cricket_scoreboard(context, ch)
-        await _edit_html(query, board + "\nDono 1–6 choose karo.", _hand_markup(cid))
+        await query.answer("You bat second. Challenger bats first.")
+        ch["event"] = "Challenger bats first. Both pick 1–6."
+        await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
+        return
+    if kind == "four":
+        await start_four(query, context, cid, ch)
+        return
+    if kind == "penalty":
+        await start_penalty(query, context, cid, ch)
+        return
+    if kind == "vault":
+        await start_vault(query, context, cid, ch)
         return
     await query.answer()
 
@@ -499,16 +692,81 @@ async def _edit_html(query, text: str, markup=None) -> None:
         pass
 
 
+async def _show_cricket(query, context, cid: str, ch: dict, *, markup=None) -> None:
+    chat_id = ch["chat_id"]
+    name_a = await _short_name(context, chat_id, ch["a"])
+    name_b = await _short_name(context, chat_id, ch["b"])
+    waiting = ch.get("waiting") or "Both pick a number. The first tap locks that ball."
+    png = render_cricket(
+        name_a=name_a,
+        name_b=name_b,
+        score_a=ch["score_a"],
+        score_b=ch["score_b"],
+        batter_is_a=ch["batter"] == ch["a"],
+        innings=ch["innings"],
+        ball=ch["balls"] + 1,
+        target=ch.get("first_innings"),
+        event=ch.get("event") or "Both pick 1–6. Same number is OUT.",
+        waiting=waiting,
+    )
+    a_m = await format_user(context, chat_id, ch["a"])
+    b_m = await format_user(context, chat_id, ch["b"])
+    bat = a_m if ch["batter"] == ch["a"] else b_m
+    caption = (
+        f"<b>Batting:</b> {bat}\n"
+        f"{a_m} {ch['score_a']}  ·  {b_m} {ch['score_b']}"
+    )
+    await send_or_edit_card(query, png, caption, markup)
+
+
+async def _finish_cricket(query, context, cid: str, ch: dict, event: str) -> None:
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    chat_id = ch["chat_id"]
+    sa, sb = ch["score_a"], ch["score_b"]
+    a_m = await format_user(context, chat_id, ch["a"])
+    b_m = await format_user(context, chat_id, ch["b"])
+    name_a = await _short_name(context, chat_id, ch["a"])
+    name_b = await _short_name(context, chat_id, ch["b"])
+    if sa > sb:
+        _award(chat_id, ch["a"], 40, win=True, kind="cricket")
+        _award(chat_id, ch["b"], 12, win=False, kind="cricket")
+        headline = f"{name_a} wins"
+        detail = f"{sa} – {sb}   ·   {event}"
+        winner = f"{a_m} wins"
+    elif sb > sa:
+        _award(chat_id, ch["b"], 40, win=True, kind="cricket")
+        _award(chat_id, ch["a"], 12, win=False, kind="cricket")
+        headline = f"{name_b} wins"
+        detail = f"{sb} – {sa}   ·   {event}"
+        winner = f"{b_m} wins"
+    else:
+        _award(chat_id, ch["a"], 20, win=None, kind="cricket")
+        _award(chat_id, ch["b"], 20, win=None, kind="cricket")
+        headline = "Match tied"
+        detail = f"{sa} – {sb}   ·   {event}"
+        winner = "Tie — both +20"
+    png = render_result(title="Hand cricket", headline=headline, detail=detail, accent=(34, 140, 90, 255))
+    _challenges.pop(cid, None)
+    await send_or_edit_card(
+        query,
+        png,
+        f"{event}\n\n<b>Final</b>  {a_m} {sa}  —  {b_m} {sb}\n{winner}",
+        None,
+    )
+
+
 async def _cricket_scoreboard(context, ch: dict) -> str:
     a_m = await format_user(context, ch["chat_id"], ch["a"])
     b_m = await format_user(context, ch["chat_id"], ch["b"])
     bat_m = a_m if ch["batter"] == ch["a"] else b_m
-    who = "first innings" if ch["innings"] == 1 else "second innings"
+    who = "first innings" if ch["innings"] == 1 else "chase"
     return (
-        f"<b>Hand cricket</b> — {who}, ball {ch['balls'] + 1}/6\n"
+        f"<b>Hand cricket</b> — {who}, ball {min(ch['balls'] + 1, 6)}/6\n"
         f"Batting: {bat_m}\n"
-        f"Score: {a_m} {ch['score_a']}  |  {b_m} {ch['score_b']}\n"
-        "Same number = OUT (over khatam)."
+        f"{a_m} {ch['score_a']}  ·  {b_m} {ch['score_b']}"
     )
 
 
@@ -530,17 +788,17 @@ async def _run_dice_duel(query, context, ch: dict) -> None:
     v2 = m2.dice.value if m2.dice else 0
     a, b = ch["a"], ch["b"]
     if v1 > v2:
-        _award(chat_id, a, 30, win=True)
-        _award(chat_id, b, 8, win=False)
-        result = f"<code>{a}</code> jeeta ({v1} vs {v2}). +30 / +8"
+        _award(chat_id, a, 30, win=True, kind="dice")
+        _award(chat_id, b, 8, win=False, kind="dice")
+        result = f"Challenger wins ({v1} vs {v2}). +30 / +8"
     elif v2 > v1:
-        _award(chat_id, b, 30, win=True)
-        _award(chat_id, a, 8, win=False)
-        result = f"<code>{b}</code> jeeta ({v2} vs {v1}). +30 / +8"
+        _award(chat_id, b, 30, win=True, kind="dice")
+        _award(chat_id, a, 8, win=False, kind="dice")
+        result = f"Opponent wins ({v2} vs {v1}). +30 / +8"
     else:
-        _award(chat_id, a, 12, win=None)
-        _award(chat_id, b, 12, win=None)
-        result = f"Tie {v1}–{v2}. Dono +12"
+        _award(chat_id, a, 12, win=None, kind="dice")
+        _award(chat_id, b, 12, win=None, kind="dice")
+        result = f"Tie {v1}–{v2}. Both +12"
     a_m = await format_user(context, chat_id, a)
     b_m = await format_user(context, chat_id, b)
     await context.bot.send_message(
@@ -553,232 +811,286 @@ async def _run_dice_duel(query, context, ch: dict) -> None:
 
 async def _on_toss_pick(query, context, cid, ch, user, face: str) -> None:
     if user.id not in (ch["a"], ch["b"]) or face not in {"heads", "tails"}:
-        await query.answer("Yeh tumhara toss nahi.", show_alert=True)
+        await query.answer("This is not your toss.", show_alert=True)
         return
     if str(user.id) in ch["picks"]:
-        await query.answer("Already chosen.")
+        await query.answer("Already locked.", show_alert=True)
         return
     ch["picks"][str(user.id)] = face
     ch["expires"] = time.time() + 300
-    await query.answer(f"You called {face}.")
     if len(ch["picks"]) < 2:
+        await query.answer(f"Locked {face}. Waiting for the other call.")
         return
     coin = random.choice(["heads", "tails"])
     a, b = str(ch["a"]), str(ch["b"])
     aw, bw = ch["picks"].get(a) == coin, ch["picks"].get(b) == coin
     chat_id = ch["chat_id"]
     if aw and not bw:
-        _award(chat_id, ch["a"], 22, win=True)
-        _award(chat_id, ch["b"], 6, win=False)
+        _award(chat_id, ch["a"], 22, win=True, kind="toss")
+        _award(chat_id, ch["b"], 6, win=False, kind="toss")
         extra = "Challenger called it right."
     elif bw and not aw:
-        _award(chat_id, ch["b"], 22, win=True)
-        _award(chat_id, ch["a"], 6, win=False)
+        _award(chat_id, ch["b"], 22, win=True, kind="toss")
+        _award(chat_id, ch["a"], 6, win=False, kind="toss")
         extra = "Opponent called it right."
     elif aw and bw:
-        _award(chat_id, ch["a"], 12, win=None)
-        _award(chat_id, ch["b"], 12, win=None)
-        extra = "Dono ne same call — split."
+        _award(chat_id, ch["a"], 12, win=None, kind="toss")
+        _award(chat_id, ch["b"], 12, win=None, kind="toss")
+        extra = "Same call — points split."
     else:
-        _award(chat_id, ch["a"], 6, win=False)
-        _award(chat_id, ch["b"], 6, win=False)
-        extra = "Dono galat. Coin kuch aur tha."
+        _award(chat_id, ch["a"], 6, win=False, kind="toss")
+        _award(chat_id, ch["b"], 6, win=False, kind="toss")
+        extra = "Both missed. The coin was the other side."
     _challenges.pop(cid, None)
-    await _edit_html(
+    png = render_result(title="Toss", headline=coin.upper(), detail=extra)
+    await send_or_edit_card(
         query,
-        f"🪙 Coin: <b>{coin}</b>\n"
-        f"Calls: {ch['picks'].get(a)} vs {ch['picks'].get(b)}\n{extra}",
+        png,
+        f"🪙 Coin: <b>{coin}</b>\nCalls: {ch['picks'].get(a)} vs {ch['picks'].get(b)}\n{extra}",
+        None,
     )
 
 
 async def _on_rps_pick(query, context, cid, ch, user, hand: str) -> None:
     if user.id not in (ch["a"], ch["b"]) or hand not in RPS:
-        await query.answer("Yeh match tumhara nahi.", show_alert=True)
+        await query.answer("This is not your match.", show_alert=True)
         return
     if str(user.id) in ch["picks"]:
-        await query.answer("Already locked.")
+        await query.answer("Already locked.", show_alert=True)
         return
     ch["picks"][str(user.id)] = hand
     ch["expires"] = time.time() + 300
-    await query.answer("Locked.")
     if len(ch["picks"]) < 2:
+        await query.answer("Locked. Waiting for the other player.")
         return
     pa, pb = ch["picks"][str(ch["a"])], ch["picks"][str(ch["b"])]
     chat_id = ch["chat_id"]
     a_m = await format_user(context, chat_id, ch["a"])
     b_m = await format_user(context, chat_id, ch["b"])
+    a_n = await _short_name(context, chat_id, ch["a"])
+    b_n = await _short_name(context, chat_id, ch["b"])
     if pa == pb:
-        _award(chat_id, ch["a"], 10, win=None)
-        _award(chat_id, ch["b"], 10, win=None)
-        outcome = "Tie. Dono +10"
+        _award(chat_id, ch["a"], 10, win=None, kind="rps")
+        _award(chat_id, ch["b"], 10, win=None, kind="rps")
+        outcome = "Tie. Both +10"
+        headline = "It's a tie"
     elif (pa, pb) in RPS_WIN:
-        _award(chat_id, ch["a"], 25, win=True)
-        _award(chat_id, ch["b"], 8, win=False)
-        outcome = f"{a_m} jeeta. +25 / +8"
+        _award(chat_id, ch["a"], 25, win=True, kind="rps")
+        _award(chat_id, ch["b"], 8, win=False, kind="rps")
+        outcome = f"{a_m} wins. +25 / +8"
+        headline = f"{a_n} wins"
     else:
-        _award(chat_id, ch["b"], 25, win=True)
-        _award(chat_id, ch["a"], 8, win=False)
-        outcome = f"{b_m} jeeta. +25 / +8"
+        _award(chat_id, ch["b"], 25, win=True, kind="rps")
+        _award(chat_id, ch["a"], 8, win=False, kind="rps")
+        outcome = f"{b_m} wins. +25 / +8"
+        headline = f"{b_n} wins"
     _challenges.pop(cid, None)
-    await _edit_html(query, f"{a_m}: {RPS[pa]}\n{b_m}: {RPS[pb]}\n\n{outcome}")
+    png = render_result(
+        title="Stone · Paper · Scissors",
+        headline=headline,
+        detail=f"{RPS[pa]}  vs  {RPS[pb]}",
+    )
+    await send_or_edit_card(
+        query,
+        png,
+        f"{a_m}: {RPS[pa]}\n{b_m}: {RPS[pb]}\n\n{outcome}",
+        None,
+    )
 
 
 async def _on_cricket_pick(query, context, cid, ch, user, n: int) -> None:
     if user.id not in (ch["a"], ch["b"]) or n not in range(1, 7):
-        await query.answer("Yeh match tumhara nahi.", show_alert=True)
+        await query.answer("This is not your match.", show_alert=True)
         return
     if ch["status"] != "live":
-        await query.answer("Pehle accept karo.", show_alert=True)
+        await query.answer("Accept the challenge first.", show_alert=True)
         return
     if str(user.id) in ch["picks"]:
-        await query.answer("Is ball pe already choose kiya.")
+        await query.answer("Locked for this ball. You cannot change it.", show_alert=True)
         return
     ch["picks"][str(user.id)] = n
     ch["expires"] = time.time() + 300
-    await query.answer(f"You played {n}.")
+    other = ch["b"] if user.id == ch["a"] else ch["a"]
     if len(ch["picks"]) < 2:
+        other_n = await _short_name(context, ch["chat_id"], other)
+        you = await _short_name(context, ch["chat_id"], user.id)
+        ch["waiting"] = f"{you} locked. Waiting for {other_n}."
+        ch["event"] = "One shot locked. Number stays hidden until both play."
+        await query.answer("Locked. Waiting for the other player.")
+        await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
         return
+
     pa, pb = ch["picks"][str(ch["a"])], ch["picks"][str(ch["b"])]
     ch["picks"] = {}
     batter = ch["batter"]
     bat_n = pa if batter == ch["a"] else pb
     bowl_n = pb if batter == ch["a"] else pa
     out = bat_n == bowl_n
-    if out:
-        ch["balls"] = 6
-    else:
+    if not out:
         key = "score_a" if batter == ch["a"] else "score_b"
         ch[key] += bat_n
         ch["balls"] += 1
-    chat_id = ch["chat_id"]
-    ball_txt = f"Ball: {pa} vs {pb}. "
-    if out:
-        ball_txt += f"OUT! Same {bat_n}."
+        ch["event"] = f"Last ball  {bat_n} vs {bowl_n}  ·  +{bat_n} runs"
     else:
-        ball_txt += f"+{bat_n} runs."
+        ch["event"] = f"OUT  ·  both played {bat_n}"
+        ch["balls"] = 6
 
-    if ch["balls"] >= 6:
+    chase_score = ch["score_a"] if batter == ch["a"] else ch["score_b"]
+    if ch["innings"] == 2 and ch.get("first_innings") is not None:
+        if chase_score > ch["first_innings"]:
+            await _finish_cricket(query, context, cid, ch, f"{ch['event']}. Target passed.")
+            return
+
+    innings_over = out or ch["balls"] >= 6
+    if innings_over:
         if ch["innings"] == 1:
+            ch["first_innings"] = ch["score_a"] if batter == ch["a"] else ch["score_b"]
             ch["innings"] = 2
             ch["balls"] = 0
             ch["batter"] = ch["b"] if batter == ch["a"] else ch["a"]
-            board = await _cricket_scoreboard(context, ch)
-            await _edit_html(
-                query,
-                ball_txt + "\n\n" + board + "\nInnings change. Dono 1–6.",
-                _hand_markup(cid),
-            )
+            target = ch["first_innings"]
+            ch["waiting"] = f"Target {target + 1}. Chase starts now."
+            ch["event"] = f"{ch['event']}. First innings {target}. Need {target + 1} to win."
+            await query.answer("Innings over. Chase begins.")
+            await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
             return
-        sa, sb = ch["score_a"], ch["score_b"]
-        a_m = await format_user(context, chat_id, ch["a"])
-        b_m = await format_user(context, chat_id, ch["b"])
-        if sa > sb:
-            _award(chat_id, ch["a"], 40, win=True)
-            _award(chat_id, ch["b"], 12, win=False)
-            winner = f"{a_m} jeeta"
-        elif sb > sa:
-            _award(chat_id, ch["b"], 40, win=True)
-            _award(chat_id, ch["a"], 12, win=False)
-            winner = f"{b_m} jeeta"
+        first = ch.get("first_innings") or 0
+        if chase_score > first:
+            why = "Target passed."
+        elif chase_score == first:
+            why = "Scores level."
         else:
-            _award(chat_id, ch["a"], 20, win=None)
-            _award(chat_id, ch["b"], 20, win=None)
-            winner = "Tie match — dono +20"
-        _challenges.pop(cid, None)
-        await _edit_html(
-            query,
-            f"{ball_txt}\n\n<b>Final:</b> {a_m} {sa}  —  {b_m} {sb}\n{winner}",
-        )
+            why = "Chase fell short."
+        await _finish_cricket(query, context, cid, ch, f"{ch['event']}. {why}")
         return
-    board = await _cricket_scoreboard(context, ch)
-    await _edit_html(query, ball_txt + "\n\n" + board, _hand_markup(cid))
+
+    ch["waiting"] = "Both pick again. Your next tap locks this ball."
+    await query.answer(ch["event"])
+    await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
+
 
 
 def _help_pages() -> dict[str, str]:
     return {
         "index": (
-            "<b>Games — kya khelein?</b>\n"
-            "Saare games is group ke andar hain. Coins sirf mazaa ke liye hain, "
-            "paise nahi. Har jeet leaderboard pe points deti hai (Indian time IST).\n\n"
-            f"1. Roz {cmd('daily')} — streak bonus. Kal bhi aana.\n"
-            f"2. {cmd('balance')} — tumhare coins / wins\n"
-            f"3. {cmd('top')} — aaj / week / all-time board\n\n"
-            "<b>Akele</b>\n"
-            f"• {cmd('toss')} heads|tails — cricket wala coin toss\n"
-            f"• {cmd('dice')} — Telegram dice, 6 pe extra\n"
-            f"• {cmd('lucky7')} low|7|high — do dice, 7 up / 7 down (fun coins only)\n\n"
-            "<b>Doston ke saath</b> (reply karo ya @tag)\n"
-            f"• {cmd('cricket')} — hand cricket, school rules\n"
+            "<b>Games</b>\n"
+            "All of these run in the group. Coins are for fun only — not real money. "
+            "Wins add leaderboard points (India time, IST).\n\n"
+            f"1. {cmd('daily')} once a day — streak bonus.\n"
+            f"2. {cmd('balance')} — your coins and wins\n"
+            f"3. {cmd('top')} — today / week / all-time board\n\n"
+            "<b>Solo</b>\n"
+            f"• {cmd('toss')} heads|tails — coin toss\n"
+            f"• {cmd('dice')} — Telegram dice, extra on a 6\n"
+            f"• {cmd('lucky7')} low|7|high — two dice (fun coins only)\n\n"
+            "<b>With a friend</b> (reply or @tag)\n"
+            f"• {cmd('cricket')} — hand cricket\n"
+            f"• {cmd('four')} — four in a row (visual board)\n"
+            f"• {cmd('penalty')} — five kicks each, shooter vs keeper\n"
+            f"• {cmd('vault')} — share the pot or take it all\n"
             f"• {cmd('rps')} — stone paper scissors\n"
-            f"• {cmd('dice')} @user — dono ke dice, bada number jeete\n"
-            f"• {cmd('toss')} @user — dono call, phir coin\n\n"
-            "Buttons se pages kholo, ya " + cmd("gamehelp") + " cricket"
+            f"• {cmd('dice')} @user — both roll, higher wins\n"
+            f"• {cmd('toss')} @user — both call, then the coin flips\n\n"
+            f"Boards: {cmd('top')} cricket · {cmd('top')} four · {cmd('top')} penalty\n"
+            "Use the buttons, or " + cmd("gamehelp") + " four"
         ),
         "daily": (
             "<b>Daily bonus</b>\n"
-            f"Har din ek baar {cmd('daily')} — India midnight (IST) ke baad reset.\n\n"
-            "Pehla din 40 coins. Lagataar roz claim = streak. "
-            "Har extra din +15, max streak bonus 10 din tak.\n\n"
-            "Bhool gaye ek din? Streak 1 se start. "
-            "Yahi reason hai roz GC pe aane ka.\n\n"
-            f"{cmd('top')} today dikhata hai aaj ke points (daily + games)."
+            f"Once a day, {cmd('daily')} — resets after midnight in India (IST).\n\n"
+            "Day one is 40 coins. Claiming every day builds a streak: "
+            "+15 extra per day, up to 10 streak days.\n\n"
+            "Miss a day and the streak returns to 1.\n\n"
+            f"{cmd('top')} today shows today's points (daily + games)."
         ),
         "toss": (
             "<b>Toss</b>\n"
-            "Cricket match se pehle wala coin. Heads ya tails.\n\n"
+            "Call heads or tails.\n\n"
             f"<code>{cmd('toss')} heads</code>\n"
             f"<code>{cmd('toss')} tails</code>\n"
-            "Sahi call = +20, galat = +5 (participation).\n\n"
-            f"Dost se: unke message pe reply karke {cmd('toss')} "
-            "ya {cmd('toss')} @username. Dono Heads/Tails dabate hain, "
-            "phir bot coin flip karta hai. Same call ho to split."
+            "Correct call = +20, wrong = +5 (still playing).\n\n"
+            f"Vs a friend: reply with {cmd('toss')} or {cmd('toss')} @username. "
+            "Both tap Heads or Tails, then the bot flips. Same call splits the points."
         ),
         "dice": (
             "<b>Dice</b>\n"
-            f"{cmd('dice')} bhejta hai asli Telegram 🎲.\n"
-            "6 = chhakka (+25), 5 = +15, chhota roll thode coins.\n\n"
-            f"Dost se: {cmd('dice')} @user → woh Accept kare → "
-            "bot dono ke liye dice roll karega. Jiska number bada, woh jeeta (+30).\n\n"
-            "Ludo / cricket dice wahi feel."
+            f"{cmd('dice')} sends a real Telegram 🎲.\n"
+            "6 = +25, 5 = +15, lower rolls still give a few coins.\n\n"
+            f"Vs a friend: {cmd('dice')} @user → they Accept → "
+            "both dice roll. Higher number wins (+30).\n\n"
+            "Same feel as a board-game dice."
         ),
         "lucky7": (
-            "<b>Lucky 7</b> (7 up / 7 down)\n"
-            "Do dice (2 se 12). Tum pehle call karte ho:\n\n"
-            f"• {cmd('lucky7')} low — 2,3,4,5,6\n"
-            f"• {cmd('lucky7')} 7 — sirf saat (zyada payout +40)\n"
-            f"• {cmd('lucky7')} high — 8 se 12\n\n"
-            "Same idea as 7 up / 7 down at a mela stall. Here it is only coins — no money."
+            "<b>Lucky 7</b>\n"
+            "Two dice (total 2–12). Call first:\n\n"
+            f"• {cmd('lucky7')} low — 2 through 6\n"
+            f"• {cmd('lucky7')} 7 — exactly seven (pays +40)\n"
+            f"• {cmd('lucky7')} high — 8 through 12\n\n"
+            "Coins only — nothing is real money."
         ),
         "rps": (
             "<b>Stone paper scissors</b>\n"
-            "India mein school / decision ke liye yahi.\n\n"
-            f"Reply karke {cmd('rps')} ya {cmd('rps')} @username.\n"
-            "Accept ke baad dono secretly tap: Stone, Paper, Scissors.\n"
-            "Stone breaks scissors, paper covers stone, scissors cut paper. "
-            "Same = tie.\n\n"
-            "Winner +25, loser +8, tie +10."
+            f"Reply with {cmd('rps')} or {cmd('rps')} @username.\n"
+            "After Accept, both tap in secret: Stone, Paper, or Scissors.\n"
+            "Stone beats scissors, paper beats stone, scissors beat paper. "
+            "Same is a tie.\n\n"
+            "Winner +25, other +8, tie +10."
         ),
         "cricket": (
-            "<b>Hand cricket</b> — sabse mazedaar yahan\n"
-            "Bachpan wala: dono haath pe 1 se 6 ungli. Same = OUT.\n\n"
-            f"<b>Kaise start:</b> kisi ko reply {cmd('cricket')} "
-            f"ya {cmd('cricket')} @username. Woh Accept dabaye.\n\n"
-            "<b>Rules</b>\n"
-            "• Har ball dono 1–6 choose (secret jab tak dono tap na karein)\n"
-            "• Alag numbers → batsman ke utne runs\n"
-            "• Same number → OUT, uski innings khatam\n"
-            "• Ek over = 6 balls (ya pehle OUT)\n"
-            "• Phir dusra player bat karega 6 balls\n"
-            "• Jiska score zyada, match uska. Tie = dono ko points\n\n"
-            "Winner +40. Short match, group mein spam kam."
+            "<b>Hand cricket</b>\n"
+            "School rules, short match.\n\n"
+            f"Reply {cmd('cricket')} or {cmd('cricket')} @username. They tap Accept.\n\n"
+            "• Challenger bats first\n"
+            "• Each ball both pick 1–6 (hidden until both lock)\n"
+            "• Your pick locks — you cannot change it\n"
+            "• Different numbers → batsman scores that many\n"
+            "• Same number → OUT, innings over (even on ball 1)\n"
+            "• Then the other player chases. Need first innings + 1 to win\n"
+            "• If first innings is 0, the chase wins on the first scoring shot\n"
+            "• Chase ends as soon as the target is passed — they do not keep batting\n\n"
+            "Winner +40, other +12, tie +20 each."
+        ),
+        "four": (
+            "<b>Four in a row</b>\n"
+            "A real board on a card. Unique in this group — not a coin flip.\n\n"
+            f"Reply {cmd('four')} or {cmd('four')} @username.\n\n"
+            "• 7 columns, 6 rows. Tap 1–7 to drop\n"
+            "• Challenger is gold and drops first\n"
+            "• First to four in a line (row, column, or diagonal) wins\n"
+            "• A drop cannot be undone\n\n"
+            f"Board: {cmd('top')} four\n"
+            "Winner +45, other +12, full board +20 each."
+        ),
+        "penalty": (
+            "<b>Penalty duel</b>\n"
+            "You are not both guessing the same thing. One shoots, one keeps.\n\n"
+            f"Reply {cmd('penalty')} or {cmd('penalty')} @username.\n\n"
+            "• Five kicks each, then sudden death if needed\n"
+            "• Both pick Left / Centre / Right in secret\n"
+            "• Same side = save. Different = goal\n"
+            "• Then you swap roles\n"
+            "• Match can end early if the other cannot catch up\n\n"
+            f"Board: {cmd('top')} penalty"
+        ),
+        "vault": (
+            "<b>The vault</b>\n"
+            "One round. One pot. Trust or greed.\n\n"
+            f"Reply {cmd('vault')} or {cmd('vault')} @username.\n\n"
+            "• Both lock Share or Take (cannot change)\n"
+            "• Both Share → you split (+24 each)\n"
+            "• One Take → they take the pot (+48 / +8)\n"
+            "• Both Take → empty (+4 each)\n\n"
+            f"Board: {cmd('top')} vault"
         ),
         "top": (
             "<b>Leaderboard</b>\n"
             f"{cmd('top')} — all-time points\n"
-            f"{cmd('top')} today — aaj IST\n"
-            f"{cmd('top')} week — is hafte\n"
-            f"{cmd('top')} wins — sabse zyada matches jeete\n\n"
-            f"{cmd('balance')} apna score. Roz {cmd('daily')} + khel ke board chadho."
+            f"{cmd('top')} today — today, IST\n"
+            f"{cmd('top')} week — this week\n"
+            f"{cmd('top')} wins — most match wins\n\n"
+            "<b>Per game</b> (wins / losses / draws)\n"
+            f"{cmd('top')} cricket · {cmd('top')} four · {cmd('top')} penalty\n"
+            f"{cmd('top')} vault · {cmd('top')} rps · {cmd('top')} dice · {cmd('top')} toss\n\n"
+            f"{cmd('balance')} shows your line for each game."
         ),
     }
 
@@ -794,6 +1106,11 @@ def _help_markup(key: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("Lucky 7", callback_data="gm:h:lucky7"),
             InlineKeyboardButton("Stone-paper", callback_data="gm:h:rps"),
             InlineKeyboardButton("Cricket", callback_data="gm:h:cricket"),
+        ],
+        [
+            InlineKeyboardButton("Four", callback_data="gm:h:four"),
+            InlineKeyboardButton("Penalty", callback_data="gm:h:penalty"),
+            InlineKeyboardButton("Vault", callback_data="gm:h:vault"),
         ],
         [
             InlineKeyboardButton("Leaderboard", callback_data="gm:h:top"),
@@ -821,6 +1138,13 @@ async def cmd_gamehelp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "sps": "rps",
             "cricket": "cricket",
             "hand": "cricket",
+            "four": "four",
+            "connect4": "four",
+            "c4": "four",
+            "penalty": "penalty",
+            "pk": "penalty",
+            "vault": "vault",
+            "heist": "vault",
             "top": "top",
             "board": "top",
         }
@@ -845,7 +1169,7 @@ async def _edit_help(query, key: str) -> None:
         )
     except BadRequest as exc:
         if "not modified" in str(exc).lower():
-            await query.answer("Yahi page hai.")
+            await query.answer("This page is already open.")
             return
         await query.answer()
         return

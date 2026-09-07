@@ -100,15 +100,18 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/unlock` | Restore permissions |
 | `/flood on` | Anti-flood (`/flood 6 4`, `/floodmute 10m`) |
 | `/scold` | Funny scolding (reply or @username); new line each time |
-| `/gamehelp` | Games guide (buttons). Also `/gamehelp cricket` |
+| `/gamehelp` | Games guide (buttons). Also `/gamehelp four` |
 | `/daily` | Daily coins + streak (resets at midnight IST) |
-| `/balance` | Your coins, wins, points |
-| `/top` | Leaderboard (`today` / `week` / `wins`) |
+| `/balance` | Coins, overall W/L, and per-game W/L/D |
+| `/top` | Points board, or `/top cricket` `/top four` (wins/losses) |
 | `/toss` | Coin toss. Solo: `heads`/`tails`. Reply to challenge a friend |
 | `/dice` | Telegram dice, or reply to duel |
 | `/lucky7` | Two dice: `low` / `7` / `high` (fun coins only) |
 | `/rps` | Stone-paper-scissors vs a member |
 | `/cricket` | Hand cricket vs a member (one over each) |
+| `/four` | Four in a row vs a member (visual board) |
+| `/penalty` | Penalty duel — five kicks each |
+| `/vault` | Share the pot or take it all |
 | `/tag` | Set a member tag; `/tag null` clears it |
 | `/whatsnew` | Official update card (also sent in private to people who `/start`) |
 | `/release send` | Owner only: deliver that card to known starters |

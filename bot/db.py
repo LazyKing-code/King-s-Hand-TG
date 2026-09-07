@@ -170,6 +170,24 @@ def init() -> None:
                 week_key TEXT,
                 PRIMARY KEY (chat_id, user_id)
             );
+            CREATE TABLE IF NOT EXISTS seen_users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                is_bot INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_seen_users_username ON seen_users(username);
+            CREATE TABLE IF NOT EXISTS game_kind_stats (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                wins INTEGER NOT NULL DEFAULT 0,
+                losses INTEGER NOT NULL DEFAULT 0,
+                draws INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (chat_id, user_id, kind)
+            );
             """
         )
         _ensure_column(conn, "chat_settings", "log_chat_id", "INTEGER")
@@ -747,6 +765,64 @@ def set_nick(chat_id: int, user_id: int, nick: str | None) -> None:
             """,
             (chat_id, user_id, nick.strip()),
         )
+
+
+def remember_user(user) -> None:
+    """Keep username → id so /ban @user works after Telegram hides the id."""
+    uid = getattr(user, "id", None)
+    if not uid:
+        return
+    uname = (getattr(user, "username", None) or "").strip().lstrip("@").lower() or None
+    first = getattr(user, "first_name", None) or ""
+    last = getattr(user, "last_name", None) or ""
+    is_bot = 1 if getattr(user, "is_bot", False) else 0
+    now = int(time.time())
+    with cursor() as conn:
+        if uname:
+            conn.execute(
+                "UPDATE seen_users SET username=NULL WHERE username=? AND user_id!=?",
+                (uname, int(uid)),
+            )
+        conn.execute(
+            """
+            INSERT INTO seen_users(user_id, username, first_name, last_name, is_bot, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=excluded.username,
+                first_name=excluded.first_name,
+                last_name=excluded.last_name,
+                is_bot=excluded.is_bot,
+                updated_at=excluded.updated_at
+            """,
+            (int(uid), uname, first, last, is_bot, now),
+        )
+
+
+def lookup_seen_username(username: str) -> dict | None:
+    needle = username.strip().lstrip("@").lower()
+    if not needle:
+        return None
+    with cursor() as conn:
+        row = conn.execute(
+            """
+            SELECT user_id, username, first_name, last_name, is_bot
+            FROM seen_users WHERE username=?
+            """,
+            (needle,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def lookup_seen_id(user_id: int) -> dict | None:
+    with cursor() as conn:
+        row = conn.execute(
+            """
+            SELECT user_id, username, first_name, last_name, is_bot
+            FROM seen_users WHERE user_id=?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def touch_member(chat_id: int, user_id: int) -> None:
@@ -1332,6 +1408,65 @@ def list_game_top(
             params,
         ).fetchall()
         return [(int(r["user_id"]), int(r["score"])) for r in rows]
+
+
+def record_kind_game(chat_id: int, user_id: int, kind: str, win: bool | None) -> None:
+    kind = kind.strip().lower()
+    if not kind:
+        return
+    dw = 1 if win is True else 0
+    dl = 1 if win is False else 0
+    dd = 1 if win is None else 0
+    with cursor() as conn:
+        conn.execute(
+            """
+            INSERT INTO game_kind_stats(chat_id, user_id, kind, wins, losses, draws)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, user_id, kind) DO UPDATE SET
+                wins=game_kind_stats.wins+excluded.wins,
+                losses=game_kind_stats.losses+excluded.losses,
+                draws=game_kind_stats.draws+excluded.draws
+            """,
+            (chat_id, user_id, kind, dw, dl, dd),
+        )
+
+
+def list_kind_stats(chat_id: int, user_id: int) -> list[dict]:
+    with cursor() as conn:
+        rows = conn.execute(
+            """
+            SELECT kind, wins, losses, draws FROM game_kind_stats
+            WHERE chat_id=? AND user_id=?
+            ORDER BY (wins+losses+draws) DESC, kind
+            """,
+            (chat_id, user_id),
+        ).fetchall()
+        return [
+            {
+                "kind": str(r["kind"]),
+                "wins": int(r["wins"]),
+                "losses": int(r["losses"]),
+                "draws": int(r["draws"]),
+            }
+            for r in rows
+        ]
+
+
+def list_kind_top(chat_id: int, kind: str, limit: int = 10) -> list[tuple[int, int, int, int]]:
+    with cursor() as conn:
+        rows = conn.execute(
+            """
+            SELECT user_id, wins, losses, draws FROM game_kind_stats
+            WHERE chat_id=? AND kind=? AND (wins+losses+draws) > 0
+            ORDER BY wins DESC, losses ASC, draws DESC, user_id
+            LIMIT ?
+            """,
+            (chat_id, kind.strip().lower(), limit),
+        ).fetchall()
+        return [
+            (int(r["user_id"]), int(r["wins"]), int(r["losses"]), int(r["draws"]))
+            for r in rows
+        ]
 
 
 def touch_bot_user(user_id: int) -> None:

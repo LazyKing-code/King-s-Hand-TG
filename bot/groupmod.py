@@ -27,7 +27,10 @@ from bot.moderation import (
 
 log = logging.getLogger(__name__)
 
-WHO = "Reply to them, or mention them."
+WHO = (
+    "Reply to them, mention @username, or use their numeric id. "
+    "Usernames work after I have seen that person in the group."
+)
 _DUR = re.compile(
     r"^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|h|hr|hrs|hour|hours|"
     r"d|day|days|w|wk|week|weeks)$",

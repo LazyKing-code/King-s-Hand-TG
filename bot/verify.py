@@ -25,7 +25,10 @@ from bot.welcome import send_welcome
 
 log = logging.getLogger(__name__)
 
-WHO = "Reply to them, or mention them."
+WHO = (
+    "Reply to them, mention @username, or use their numeric id. "
+    "Usernames work after I have seen that person in the group."
+)
 _starting: set[tuple[int, int]] = set()
 _skip_goodbye: set[tuple[int, int]] = set()
 
