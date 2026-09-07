@@ -83,52 +83,43 @@ def render_cricket(
     innings: int,
     ball: int,
     target: int | None,
-    event: str,
+    last: str,
     waiting: str,
-    ball_log: list[str] | None = None,
 ) -> bytes:
+    from bot.cricket import draw_name
+
+    name_a, name_b = draw_name(name_a), draw_name(name_b)
     img, draw = _base(_GREEN)
-    title = _font(22, bold=True)
-    draw.text((56, 48), "KING'S HAND  ·  HAND CRICKET", font=title, fill=_GOLD)
-    phase = "1ST INNINGS" if innings == 1 else "2ND INNINGS  ·  CHASE"
-    now = min(max(ball, 1), 6)
-    draw.text((56, 86), f"{phase}     NOW BALL {now}/6", font=_font(18), fill=_MUTED)
+    draw.text((56, 48), "HAND CRICKET", font=_font(28, bold=True), fill=_GOLD)
+    if innings == 2 and target is not None:
+        chase = score_b if not batter_is_a else score_a
+        need = max(0, target + 1 - chase)
+        sub = f"CHASE  ·  ball {min(max(ball, 1), 6)}/6  ·  need {need}"
+    else:
+        sub = f"FIRST INNINGS  ·  ball {min(max(ball, 1), 6)}/6"
+    draw.text((56, 92), sub, font=_font(18), fill=_MUTED)
 
     bat, bowl = (name_a, name_b) if batter_is_a else (name_b, name_a)
-    draw.text((56, 128), "BATTING", font=_font(14, bold=True), fill=_GREEN)
-    bf = _fit(draw, bat, 36, 420, bold=True)
-    draw.text((56, 148), bat, font=bf, fill=_WHITE)
-    draw.text((56, 204), "BOWLING", font=_font(14, bold=True), fill=_MUTED)
-    of = _fit(draw, bowl, 24, 420, bold=True)
-    draw.text((56, 224), bowl, font=of, fill=_MUTED)
+    draw.rounded_rectangle([56, 130, 470, 280], radius=18, fill=(8, 14, 26, 255))
+    draw.text((80, 148), "BATTING", font=_font(14, bold=True), fill=_GREEN)
+    draw.text((80, 176), bat, font=_fit(draw, bat, 32, 350, bold=True), fill=_WHITE)
+    draw.text((80, 226), "BOWLING", font=_font(14, bold=True), fill=_MUTED)
+    draw.text((80, 248), bowl, font=_fit(draw, bowl, 22, 350, bold=True), fill=_MUTED)
 
-    draw.rounded_rectangle([520, 120, 904, 280], radius=20, fill=(8, 14, 26, 255))
-    la = _fit(draw, name_a, 16, 160)
-    lb = _fit(draw, name_b, 16, 160)
-    draw.text((548, 140), name_a, font=la, fill=_MUTED)
-    draw.text((548, 168), str(score_a), font=_font(48, bold=True), fill=_GOLD if batter_is_a else _WHITE)
-    draw.text((730, 140), name_b, font=lb, fill=_MUTED)
-    draw.text((730, 168), str(score_b), font=_font(48, bold=True), fill=_GOLD if not batter_is_a else _WHITE)
+    draw.rounded_rectangle([494, 130, 904, 280], radius=18, fill=(8, 14, 26, 255))
+    draw.text((520, 148), name_a, font=_fit(draw, name_a, 16, 160), fill=_MUTED)
+    draw.text((520, 176), str(score_a), font=_font(44, bold=True), fill=_GOLD if batter_is_a else _WHITE)
+    draw.text((720, 148), name_b, font=_fit(draw, name_b, 16, 160), fill=_MUTED)
+    draw.text((720, 176), str(score_b), font=_font(44, bold=True), fill=_GOLD if not batter_is_a else _WHITE)
     if innings == 2 and target is not None:
-        need = max(0, target + 1 - (score_b if not batter_is_a else score_a))
-        draw.text((548, 232), f"Target {target + 1}   ·   Need {need}", font=_font(18, bold=True), fill=_GOLD)
+        draw.text((520, 236), f"Target {target + 1}", font=_font(18, bold=True), fill=_GOLD)
     else:
-        draw.text((548, 232), "Set a total. Same number = OUT", font=_font(16), fill=_MUTED)
+        draw.text((520, 236), "Same number = OUT", font=_font(16), fill=_MUTED)
 
-    draw.rounded_rectangle([56, 290, 904, 488], radius=18, fill=(8, 14, 26, 200))
-    lines = [x for x in (ball_log or []) if x][-4:]
-    y = 308
-    if lines:
-        draw.text((80, y), "BALL LOG", font=_font(13, bold=True), fill=_MUTED)
-        y += 28
-        for line in lines:
-            draw.text((80, y), line[:64], font=_fit(draw, line[:64], 18, 800), fill=_WHITE)
-            y += 26
-    else:
-        ev = event or "Both pick 1–6. Same number is OUT."
-        draw.text((80, y), ev, font=_fit(draw, ev, 22, 800, bold=True), fill=_WHITE)
-        y += 40
-    draw.text((80, min(y + 8, 430)), waiting, font=_fit(draw, waiting, 18, 800), fill=_MUTED)
+    draw.rounded_rectangle([56, 304, 904, 488], radius=18, fill=(8, 14, 26, 200))
+    headline = last or "Both tap 1–6. Same number is out."
+    draw.text((80, 340), headline, font=_fit(draw, headline, 26, 800, bold=True), fill=_WHITE)
+    draw.text((80, 410), waiting or "One tap each. Then the ball is bowled.", font=_fit(draw, waiting, 20, 800), fill=_MUTED)
     return _png(img)
 
 
@@ -282,57 +273,68 @@ async def send_or_edit_card(
     from telegram import InputFile, InputMediaPhoto
     from telegram.error import BadRequest
 
-    caption = caption[:1024]
-    media = InputMediaPhoto(
-        media=InputFile(png_file(png), filename="kings-hand-game.png"),
-        caption=caption,
-        parse_mode="HTML",
-    )
+    caption = (caption or "").strip()[:1024]
     bot = query.get_bot()
-    chat_id = query.message.chat_id if query.message else None
-    seen: set[int] = set()
+    message = query.message
+    chat_id = message.chat_id if message else None
+    if not chat_id:
+        return None
+
+    async def edit(mid: int) -> bool:
+        media_kw = {
+            "media": InputFile(png_file(png), filename="kings-hand-game.png"),
+            "caption": caption or None,
+        }
+        if caption and "<" in caption:
+            media_kw["parse_mode"] = "HTML"
+        media = InputMediaPhoto(**media_kw)
+        await bot.edit_message_media(
+            chat_id=chat_id,
+            message_id=mid,
+            media=media,
+            reply_markup=markup,
+        )
+        return True
+
     targets: list[int] = []
     if edit_message_id:
         targets.append(int(edit_message_id))
-    if query.message:
-        targets.append(query.message.message_id)
+    if message and message.photo:
+        targets.append(message.message_id)
 
+    seen: set[int] = set()
     for mid in targets:
-        if mid in seen or not chat_id:
+        if mid in seen:
             continue
         seen.add(mid)
         try:
-            await bot.edit_message_media(
-                chat_id=chat_id,
-                message_id=mid,
-                media=media,
-                reply_markup=markup,
-            )
+            await edit(mid)
             return mid
-        except BadRequest:
+        except BadRequest as err:
+            text = str(err).lower()
+            if "not modified" in text:
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id, message_id=mid, reply_markup=markup
+                    )
+                except Exception:
+                    pass
+                return mid
             continue
         except Exception:
             continue
+
+    send_kw = {
+        "chat_id": chat_id,
+        "photo": png_file(png),
+        "caption": caption or None,
+        "reply_markup": markup,
+    }
+    if caption and "<" in caption:
+        send_kw["parse_mode"] = "HTML"
+    sent = await bot.send_photo(**send_kw)
     try:
-        sent = await query.message.reply_photo(
-            photo=png_file(png),
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=markup,
-        )
+        await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
-        try:
-            await query.edit_message_text(
-                caption, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True
-            )
-        except Exception:
-            pass
-        return query.message.message_id if query.message else None
-    for mid in seen:
-        if sent and mid == sent.message_id:
-            continue
-        try:
-            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=mid, reply_markup=None)
-        except Exception:
-            pass
+        pass
     return sent.message_id if sent else None
