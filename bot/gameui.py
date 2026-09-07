@@ -85,12 +85,14 @@ def render_cricket(
     target: int | None,
     event: str,
     waiting: str,
+    ball_log: list[str] | None = None,
 ) -> bytes:
     img, draw = _base(_GREEN)
     title = _font(22, bold=True)
     draw.text((56, 48), "KING'S HAND  ·  HAND CRICKET", font=title, fill=_GOLD)
     phase = "1ST INNINGS" if innings == 1 else "2ND INNINGS  ·  CHASE"
-    draw.text((56, 86), f"{phase}     BALL {min(ball, 6)}/6", font=_font(18), fill=_MUTED)
+    now = min(max(ball, 1), 6)
+    draw.text((56, 86), f"{phase}     NOW BALL {now}/6", font=_font(18), fill=_MUTED)
 
     bat, bowl = (name_a, name_b) if batter_is_a else (name_b, name_a)
     draw.text((56, 128), "BATTING", font=_font(14, bold=True), fill=_GREEN)
@@ -100,7 +102,6 @@ def render_cricket(
     of = _fit(draw, bowl, 24, 420, bold=True)
     draw.text((56, 224), bowl, font=of, fill=_MUTED)
 
-    # Scores
     draw.rounded_rectangle([520, 120, 904, 280], radius=20, fill=(8, 14, 26, 255))
     la = _fit(draw, name_a, 16, 160)
     lb = _fit(draw, name_b, 16, 160)
@@ -115,12 +116,19 @@ def render_cricket(
         draw.text((548, 232), "Set a total. Same number = OUT", font=_font(16), fill=_MUTED)
 
     draw.rounded_rectangle([56, 290, 904, 488], radius=18, fill=(8, 14, 26, 200))
-    ev = event or "Both pick 1–6. Your shot locks until the ball is bowled."
-    ef = _fit(draw, ev, 22, 800, bold=True)
-    draw.text((80, 318), ev, font=ef, fill=_WHITE)
-    wf = _fit(draw, waiting, 18, 800)
-    draw.text((80, 380), waiting, font=wf, fill=_MUTED)
-    draw.text((80, 430), "Pick is locked for this ball — you cannot change it.", font=_font(15), fill=(100, 116, 140, 255))
+    lines = [x for x in (ball_log or []) if x][-4:]
+    y = 308
+    if lines:
+        draw.text((80, y), "BALL LOG", font=_font(13, bold=True), fill=_MUTED)
+        y += 28
+        for line in lines:
+            draw.text((80, y), line[:64], font=_fit(draw, line[:64], 18, 800), fill=_WHITE)
+            y += 26
+    else:
+        ev = event or "Both pick 1–6. Same number is OUT."
+        draw.text((80, y), ev, font=_fit(draw, ev, 22, 800, bold=True), fill=_WHITE)
+        y += 40
+    draw.text((80, min(y + 8, 430)), waiting, font=_fit(draw, waiting, 18, 800), fill=_MUTED)
     return _png(img)
 
 
@@ -263,7 +271,14 @@ def render_vault(
     return _png(img)
 
 
-async def send_or_edit_card(query, png: bytes, caption: str, markup=None) -> None:
+async def send_or_edit_card(
+    query,
+    png: bytes,
+    caption: str,
+    markup=None,
+    *,
+    edit_message_id: int | None = None,
+) -> int | None:
     from telegram import InputFile, InputMediaPhoto
     from telegram.error import BadRequest
 
@@ -273,15 +288,33 @@ async def send_or_edit_card(query, png: bytes, caption: str, markup=None) -> Non
         caption=caption,
         parse_mode="HTML",
     )
+    bot = query.get_bot()
+    chat_id = query.message.chat_id if query.message else None
+    seen: set[int] = set()
+    targets: list[int] = []
+    if edit_message_id:
+        targets.append(int(edit_message_id))
+    if query.message:
+        targets.append(query.message.message_id)
+
+    for mid in targets:
+        if mid in seen or not chat_id:
+            continue
+        seen.add(mid)
+        try:
+            await bot.edit_message_media(
+                chat_id=chat_id,
+                message_id=mid,
+                media=media,
+                reply_markup=markup,
+            )
+            return mid
+        except BadRequest:
+            continue
+        except Exception:
+            continue
     try:
-        await query.edit_message_media(media=media, reply_markup=markup)
-        return
-    except BadRequest:
-        pass
-    except Exception:
-        pass
-    try:
-        await query.message.reply_photo(
+        sent = await query.message.reply_photo(
             photo=png_file(png),
             caption=caption,
             parse_mode="HTML",
@@ -294,8 +327,12 @@ async def send_or_edit_card(query, png: bytes, caption: str, markup=None) -> Non
             )
         except Exception:
             pass
-        return
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+        return query.message.message_id if query.message else None
+    for mid in seen:
+        if sent and mid == sent.message_id:
+            continue
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=mid, reply_markup=None)
+        except Exception:
+            pass
+    return sent.message_id if sent else None

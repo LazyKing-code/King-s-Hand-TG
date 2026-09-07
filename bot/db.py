@@ -1495,6 +1495,7 @@ _MATCH_INT_KEYS = (
     "goals_b",
     "kicks_a",
     "kicks_b",
+    "card_msg_id",
 )
 
 

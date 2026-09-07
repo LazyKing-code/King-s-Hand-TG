@@ -727,7 +727,10 @@ async def _on_accept(query, context, cid: str, ch: dict, user: User) -> None:
         return
     if kind == "cricket":
         await query.answer("You bat second. Challenger bats first.")
-        ch["event"] = "Challenger bats first. Both pick 1–6."
+        ch["event"] = "Ball 1. Both pick 1–6. Same number is OUT."
+        ch["waiting"] = "One tap each. The number stays hidden until both play."
+        ch["ball_log"] = []
+        ch["picks"] = {}
         _save_match(cid, ch)
         await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
         return
@@ -759,31 +762,45 @@ async def _show_cricket(query, context, cid: str, ch: dict, *, markup=None) -> N
     chat_id = ch["chat_id"]
     name_a = await _short_name(context, chat_id, ch["a"])
     name_b = await _short_name(context, chat_id, ch["b"])
-    waiting = ch.get("waiting") or "Both pick a number. The first tap locks that ball."
+    waiting = ch.get("waiting") or "Both pick 1–6. One tap each for this ball."
     first = ch.get("first_innings")
+    now_ball = int(ch.get("balls") or 0) + 1
+    batter_is_a = ch["batter"] == ch["a"]
     png = render_cricket(
         name_a=name_a,
         name_b=name_b,
         score_a=int(ch["score_a"] or 0),
         score_b=int(ch["score_b"] or 0),
-        batter_is_a=ch["batter"] == ch["a"],
+        batter_is_a=batter_is_a,
         innings=int(ch["innings"] or 1),
-        ball=int(ch["balls"] or 0) + 1,
+        ball=now_ball,
         target=None if first is None else int(first),
         event=ch.get("event") or "Both pick 1–6. Same number is OUT.",
         waiting=waiting,
+        ball_log=list(ch.get("ball_log") or []),
     )
-    a_m = await format_user(context, chat_id, ch["a"])
-    b_m = await format_user(context, chat_id, ch["b"])
-    bat = a_m if ch["batter"] == ch["a"] else b_m
+    bat = name_a if batter_is_a else name_b
     caption = (
-        f"<b>Batting:</b> {bat}\n"
-        f"{a_m} {ch['score_a']}  ·  {b_m} {ch['score_b']}"
+        f"{name_a} {int(ch['score_a'] or 0)}  —  {name_b} {int(ch['score_b'] or 0)}\n"
+        f"Batting {bat} · now ball {min(now_ball, 6)}/6"
     )
     try:
-        await send_or_edit_card(query, png, caption, markup)
+        mid = await send_or_edit_card(
+            query,
+            png,
+            caption,
+            markup,
+            edit_message_id=ch.get("card_msg_id"),
+        )
     except Exception:
         log.exception("cricket card send failed")
+        return
+    if mid:
+        live = _get_match(cid)
+        if not live:
+            return
+        live["card_msg_id"] = mid
+        _save_match(cid, live)
 
 
 async def _finish_cricket(query, context, cid: str, ch: dict, event: str) -> None:
@@ -816,12 +833,14 @@ async def _finish_cricket(query, context, cid: str, ch: dict, event: str) -> Non
         detail = f"{sa} – {sb}   ·   {event}"
         winner = "Tie — both +20"
     png = render_result(title="Hand cricket", headline=headline, detail=detail, accent=(34, 140, 90, 255))
+    card_id = ch.get("card_msg_id")
     _end_match(cid)
     await send_or_edit_card(
         query,
         png,
         f"{event}\n\n<b>Final</b>  {a_m} {sa}  —  {b_m} {sb}\n{winner}",
         None,
+        edit_message_id=card_id,
     )
 
 
@@ -971,6 +990,24 @@ async def _on_rps_pick(query, context, cid, ch, user, hand: str) -> None:
     )
 
 
+def _cricket_picks(ch: dict) -> dict[str, int]:
+    raw = ch.get("picks") or {}
+    out: dict[str, int] = {}
+    if isinstance(raw, dict):
+        for key, val in raw.items():
+            try:
+                out[str(int(key))] = int(val)
+            except (TypeError, ValueError):
+                continue
+    ch["picks"] = out
+    return out
+
+
+def _both_hands(ch: dict) -> bool:
+    picks = _cricket_picks(ch)
+    return str(ch["a"]) in picks and str(ch["b"]) in picks
+
+
 async def _on_cricket_pick(query, context, cid, ch, user, n: int) -> None:
     if user.id not in (ch["a"], ch["b"]) or n not in range(1, 7):
         await query.answer("This is not your match.", show_alert=True)
@@ -978,46 +1015,71 @@ async def _on_cricket_pick(query, context, cid, ch, user, n: int) -> None:
     if ch["status"] != "live":
         await query.answer("Accept the challenge first.", show_alert=True)
         return
-    if str(user.id) in ch["picks"]:
-        await query.answer("Locked for this ball. You cannot change it.", show_alert=True)
-        return
-    ch["picks"][str(user.id)] = n
-    _save_match(cid, ch)
-    other = ch["b"] if user.id == ch["a"] else ch["a"]
-    if len(ch["picks"]) < 2:
-        innings, balls = int(ch["innings"] or 1), int(ch["balls"] or 0)
+    picks = _cricket_picks(ch)
+    uid = str(user.id)
+    if uid in picks and not _both_hands(ch):
+        other = ch["b"] if user.id == ch["a"] else ch["a"]
         other_n = await _short_name(context, ch["chat_id"], other)
-        you = await _short_name(context, ch["chat_id"], user.id)
-        fresh = _get_match(cid)
-        if (
-            not fresh
-            or int(fresh.get("innings") or 1) != innings
-            or int(fresh.get("balls") or 0) != balls
-            or len(fresh.get("picks") or {}) >= 2
-        ):
-            await query.answer("Locked.")
-            return
-        fresh["waiting"] = f"{you} locked. Waiting for {other_n}."
-        fresh["event"] = "One shot locked. Number stays hidden until both play."
-        _save_match(cid, fresh)
-        await query.answer("Locked. Waiting for the other player.")
-        await _show_cricket(query, context, cid, fresh, markup=_hand_markup(cid))
+        await query.answer(f"You already locked this ball. Waiting for {other_n}.")
+        return
+    if uid not in picks:
+        picks[uid] = n
+        ch["picks"] = picks
+        _save_match(cid, ch)
+        ch = _get_match(cid) or ch
+        _cricket_picks(ch)
+
+    if _both_hands(ch):
+        await _resolve_cricket_ball(query, context, cid, ch)
         return
 
-    pa, pb = int(ch["picks"][str(ch["a"])]), int(ch["picks"][str(ch["b"])])
+    other = ch["b"] if user.id == ch["a"] else ch["a"]
+    innings, balls = int(ch["innings"] or 1), int(ch["balls"] or 0)
+    other_n = await _short_name(context, ch["chat_id"], other)
+    you = await _short_name(context, ch["chat_id"], user.id)
+    fresh = _get_match(cid) or ch
+    if (
+        not fresh
+        or int(fresh.get("innings") or 1) != innings
+        or int(fresh.get("balls") or 0) != balls
+    ):
+        await query.answer("Locked.")
+        return
+    if _both_hands(fresh):
+        await _resolve_cricket_ball(query, context, cid, fresh)
+        return
+    fresh["waiting"] = f"{you} locked. {other_n} still needs to pick."
+    fresh["event"] = f"Ball {balls + 1}/6 — one shot in. Hidden until both play."
+    _save_match(cid, fresh)
+    await query.answer(f"Locked {n}. Waiting for {other_n}.")
+    await _show_cricket(query, context, cid, fresh, markup=_hand_markup(cid))
+
+
+async def _resolve_cricket_ball(query, context, cid: str, ch: dict) -> None:
+    picks = _cricket_picks(ch)
+    try:
+        pa, pb = int(picks[str(ch["a"])]), int(picks[str(ch["b"])])
+    except (KeyError, TypeError, ValueError):
+        await query.answer("Pick did not save. Tap again.", show_alert=True)
+        return
     ch["picks"] = {}
     batter = ch["batter"]
     bat_n = pa if batter == ch["a"] else pb
     bowl_n = pb if batter == ch["a"] else pa
     out = bat_n == bowl_n
+    played = int(ch.get("balls") or 0) + 1
+    log_lines = [str(x) for x in (ch.get("ball_log") or []) if x]
     if not out:
         key = "score_a" if batter == ch["a"] else "score_b"
         ch[key] = int(ch.get(key) or 0) + bat_n
-        ch["balls"] = int(ch.get("balls") or 0) + 1
-        ch["event"] = f"Last ball  {bat_n} vs {bowl_n}  ·  +{bat_n} runs"
+        ch["balls"] = played
+        line = f"Ball {played}/6  bat {bat_n}  bowl {bowl_n}  +{bat_n}"
     else:
-        ch["event"] = f"OUT  ·  both played {bat_n}"
         ch["balls"] = 6
+        line = f"Ball {played}/6  OUT  both played {bat_n}"
+    log_lines.append(line)
+    ch["ball_log"] = log_lines[-8:]
+    ch["event"] = line
 
     chase_score = int((ch["score_a"] if batter == ch["a"] else ch["score_b"]) or 0)
     innings = int(ch.get("innings") or 1)
@@ -1025,7 +1087,7 @@ async def _on_cricket_pick(query, context, cid, ch, user, n: int) -> None:
     if innings == 2 and first is not None:
         if chase_score > int(first):
             _save_match(cid, ch)
-            await _finish_cricket(query, context, cid, ch, f"{ch['event']}. Target passed.")
+            await _finish_cricket(query, context, cid, ch, f"{line}. Target passed.")
             return
 
     innings_over = out or int(ch.get("balls") or 0) >= 6
@@ -1036,26 +1098,27 @@ async def _on_cricket_pick(query, context, cid, ch, user, n: int) -> None:
             ch["balls"] = 0
             ch["batter"] = ch["b"] if batter == ch["a"] else ch["a"]
             target = int(ch["first_innings"] or 0)
-            ch["waiting"] = f"Target {target + 1}. Chase starts now."
-            ch["event"] = f"{ch['event']}. First innings {target}. Need {target + 1} to win."
+            ch["waiting"] = f"Chase. Need {target + 1}. Both pick for ball 1."
+            ch["event"] = f"{line}. First innings {target}. Need {target + 1}."
+            ch["ball_log"] = (ch.get("ball_log") or []) + [f"Chase starts · need {target + 1}"]
             _save_match(cid, ch)
             await query.answer("Innings over. Chase begins.")
             await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
             return
-        first = int(ch.get("first_innings") or 0)
-        if chase_score > first:
+        first_n = int(ch.get("first_innings") or 0)
+        if chase_score > first_n:
             why = "Target passed."
-        elif chase_score == first:
+        elif chase_score == first_n:
             why = "Scores level."
         else:
             why = "Chase fell short."
         _save_match(cid, ch)
-        await _finish_cricket(query, context, cid, ch, f"{ch['event']}. {why}")
+        await _finish_cricket(query, context, cid, ch, f"{line}. {why}")
         return
 
-    ch["waiting"] = "Both pick again. Your next tap locks this ball."
+    ch["waiting"] = "Both pick again for the next ball. One tap each."
     _save_match(cid, ch)
-    await query.answer(ch["event"])
+    await query.answer(line)
     await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
 
 
