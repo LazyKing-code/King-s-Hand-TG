@@ -288,12 +288,14 @@ async def send_or_edit_card(query, png: bytes, caption: str, markup=None) -> Non
             reply_markup=markup,
         )
     except Exception:
-        await query.edit_message_text(caption, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
-        return
-    try:
-        await query.message.delete()
-    except Exception:
         try:
-            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text(
+                caption, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True
+            )
         except Exception:
             pass
+        return
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass

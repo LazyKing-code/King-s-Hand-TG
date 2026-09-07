@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -6,8 +7,11 @@ from bot.config import DB_PATH
 
 
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -188,6 +192,13 @@ def init() -> None:
                 draws INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (chat_id, user_id, kind)
             );
+            CREATE TABLE IF NOT EXISTS game_matches (
+                cid TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                expires REAL NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_game_matches_chat ON game_matches(chat_id);
             """
         )
         _ensure_column(conn, "chat_settings", "log_chat_id", "INTEGER")
@@ -1467,6 +1478,159 @@ def list_kind_top(chat_id: int, kind: str, limit: int = 10) -> list[tuple[int, i
             (int(r["user_id"]), int(r["wins"]), int(r["losses"]), int(r["draws"]))
             for r in rows
         ]
+
+
+_MATCH_INT_KEYS = (
+    "a",
+    "b",
+    "chat_id",
+    "batter",
+    "turn",
+    "shooter",
+    "score_a",
+    "score_b",
+    "balls",
+    "innings",
+    "goals_a",
+    "goals_b",
+    "kicks_a",
+    "kicks_b",
+)
+
+
+def _coerce_int(value, *, default=None):
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+
+def normalize_game_match(data: dict) -> dict:
+    for key in _MATCH_INT_KEYS:
+        if key not in data:
+            continue
+        data[key] = _coerce_int(data[key], default=data[key])
+    if "first_innings" in data and data["first_innings"] is not None and data["first_innings"] != "":
+        data["first_innings"] = _coerce_int(data["first_innings"], default=data["first_innings"])
+    picks = data.get("picks")
+    if isinstance(picks, dict):
+        clean = {}
+        for key, val in picks.items():
+            if isinstance(val, str) and val.isdigit():
+                val = int(val)
+            clean[str(key)] = val
+        data["picks"] = clean
+    return data
+
+
+def _same_match_frame(prev: dict, ch: dict) -> bool:
+    keys = (
+        "kind",
+        "status",
+        "innings",
+        "balls",
+        "score_a",
+        "score_b",
+        "kicks_a",
+        "kicks_b",
+        "goals_a",
+        "goals_b",
+        "board",
+        "batter",
+        "turn",
+        "shooter",
+    )
+    return all(prev.get(k) == ch.get(k) for k in keys)
+
+
+def save_game_match(cid: str, ch: dict) -> None:
+    normalize_game_match(ch)
+    with cursor() as conn:
+        row = conn.execute("SELECT payload FROM game_matches WHERE cid=?", (cid,)).fetchone()
+        if row:
+            prev = _decode_match(row["payload"])
+            if prev and _same_match_frame(prev, ch):
+                merged = dict(prev.get("picks") or {})
+                merged.update(ch.get("picks") or {})
+                ch["picks"] = merged
+        payload = json.dumps(ch, default=str)
+        conn.execute(
+            """
+            INSERT INTO game_matches(cid, chat_id, expires, payload)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(cid) DO UPDATE SET
+                chat_id=excluded.chat_id,
+                expires=excluded.expires,
+                payload=excluded.payload
+            """,
+            (cid, int(ch.get("chat_id") or 0), float(ch.get("expires") or 0), payload),
+        )
+
+
+def _decode_match(payload: str) -> dict | None:
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return normalize_game_match(data)
+
+
+def decode_game_match(payload: str) -> dict | None:
+    return _decode_match(payload)
+
+
+def peek_game_match_row(cid: str) -> sqlite3.Row | None:
+    with cursor() as conn:
+        return conn.execute(
+            "SELECT payload, expires FROM game_matches WHERE cid=?",
+            (cid,),
+        ).fetchone()
+
+
+def load_game_match(cid: str) -> dict | None:
+    row = peek_game_match_row(cid)
+    if not row:
+        return None
+    if float(row["expires"]) < time.time():
+        delete_game_match(cid)
+        return None
+    try:
+        return _decode_match(row["payload"])
+    except Exception:
+        return None
+
+
+def delete_game_match(cid: str) -> None:
+    with cursor() as conn:
+        conn.execute("DELETE FROM game_matches WHERE cid=?", (cid,))
+
+
+def list_game_matches(chat_id: int) -> list[tuple[str, dict]]:
+    now = time.time()
+    with cursor() as conn:
+        rows = conn.execute(
+            "SELECT cid, payload, expires FROM game_matches WHERE chat_id=? AND expires > ?",
+            (chat_id, now),
+        ).fetchall()
+    out: list[tuple[str, dict]] = []
+    for row in rows:
+        data = _decode_match(row["payload"])
+        if data:
+            out.append((str(row["cid"]), data))
+    return out
+
+
+def purge_game_matches(now: float | None = None) -> None:
+    stamp = time.time() if now is None else now
+    with cursor() as conn:
+        conn.execute("DELETE FROM game_matches WHERE expires < ?", (stamp,))
 
 
 def touch_bot_user(user_id: int) -> None:

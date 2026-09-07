@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import secrets
@@ -26,8 +27,10 @@ from bot.moderation import format_user, mention, require_group
 
 log = logging.getLogger(__name__)
 
-_CHALLENGE_TTL = 120
 _challenges: dict[str, dict] = {}
+_match_locks: dict[str, asyncio.Lock] = {}
+_ACCEPT_TTL = 180
+_LIVE_TTL = 45 * 60
 
 RPS = {"stone": "🪨 Stone", "paper": "📄 Paper", "scissors": "✂️ Scissors"}
 RPS_WIN = {("stone", "scissors"), ("paper", "stone"), ("scissors", "paper")}
@@ -94,8 +97,58 @@ def _new_id() -> str:
     return secrets.token_hex(4)
 
 
+def _match_ttl(ch: dict) -> int:
+    return _LIVE_TTL if ch.get("status") == "live" else _ACCEPT_TTL
+
+
+def _match_lock(cid: str) -> asyncio.Lock:
+    lock = _match_locks.get(cid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _match_locks[cid] = lock
+    return lock
+
+
+def _save_match(cid: str, ch: dict) -> None:
+    ch["expires"] = time.time() + _match_ttl(ch)
+    _challenges[cid] = ch
+    try:
+        db.save_game_match(cid, ch)
+    except Exception:
+        log.exception("game match save failed cid=%s", cid)
+
+
+def _end_match(cid: str) -> None:
+    _challenges.pop(cid, None)
+    db.delete_game_match(cid)
+
+
+def _get_match(cid: str) -> dict | None:
+    row = db.peek_game_match_row(cid)
+    if row is not None:
+        if float(row["expires"]) < time.time():
+            db.delete_game_match(cid)
+            _challenges.pop(cid, None)
+            return None
+        ch = db.decode_game_match(row["payload"])
+        if not ch:
+            return None
+        _challenges[cid] = ch
+        return ch
+    ram = _challenges.get(cid)
+    if not ram or time.time() > float(ram.get("expires") or 0):
+        _challenges.pop(cid, None)
+        return None
+    try:
+        db.save_game_match(cid, ram)
+    except Exception:
+        log.exception("game match heal failed cid=%s", cid)
+    return ram
+
+
 def _purge() -> None:
     now = time.time()
+    db.purge_game_matches(now)
     dead = [k for k, v in _challenges.items() if v.get("expires", 0) < now]
     for k in dead:
         _challenges.pop(k, None)
@@ -103,6 +156,8 @@ def _purge() -> None:
 
 def _pending_for(chat_id: int, user_id: int) -> str | None:
     _purge()
+    for cid, ch in db.list_game_matches(chat_id):
+        _challenges[cid] = ch
     for cid, ch in _challenges.items():
         if ch.get("chat_id") != chat_id:
             continue
@@ -549,7 +604,7 @@ async def _open_challenge(
         "a": actor.id,
         "b": rival.id,
         "status": "open",
-        "expires": time.time() + _CHALLENGE_TTL,
+        "expires": time.time() + _ACCEPT_TTL,
         "picks": {},
         "score_a": 0,
         "score_b": 0,
@@ -559,6 +614,7 @@ async def _open_challenge(
         "event": "",
         "first_innings": None,
     }
+    _save_match(cid, _challenges[cid])
     await update.effective_message.reply_html(
         text + "\n<i>2 minutes to accept.</i>",
         reply_markup=_accept_markup(cid),
@@ -577,51 +633,55 @@ async def on_game_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _edit_help(query, parts[2] if len(parts) > 2 else "index")
         return
     cid = parts[2]
-    ch = _challenges.get(cid)
-    user = update.effective_user
-    if not ch or not user:
-        await query.answer("This match expired. Start a new one.", show_alert=True)
-        return
-    if time.time() > ch["expires"]:
-        _challenges.pop(cid, None)
-        await query.answer("Time up. Start a new match.", show_alert=True)
-        return
-    action = parts[1]
-    if action == "ok":
-        await _on_accept(query, context, cid, ch, user)
-        return
-    if action == "no":
-        if user.id not in (ch["a"], ch["b"]):
-            await query.answer("This is not your match.", show_alert=True)
+    async with _match_lock(cid):
+        ch = _get_match(cid)
+        user = update.effective_user or (query.from_user if query else None)
+        if not user:
+            await query.answer("Could not see who tapped. Try again.", show_alert=True)
             return
-        _challenges.pop(cid, None)
-        await query.answer("Challenge cancelled.")
-        try:
-            await query.edit_message_text("Challenge cancelled.")
-        except BadRequest:
-            pass
-        return
-    if action == "r":
-        await _on_rps_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
-        return
-    if action == "c":
-        n = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
-        await _on_cricket_pick(query, context, cid, ch, user, n)
-        return
-    if action == "t":
-        await _on_toss_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
-        return
-    if action == "f":
-        col = int(parts[3]) - 1 if len(parts) > 3 and parts[3].isdigit() else -1
-        await on_four_drop(query, context, cid, ch, user, col)
-        return
-    if action == "p":
-        await on_penalty_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
-        return
-    if action == "v":
-        await on_vault_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
-        return
-    await query.answer()
+        if not ch:
+            await query.answer("This match is no longer running. Start a new one.", show_alert=True)
+            return
+        if time.time() > float(ch.get("expires") or 0):
+            _end_match(cid)
+            await query.answer("This match timed out. Start a new one.", show_alert=True)
+            return
+        action = parts[1]
+        if action == "ok":
+            await _on_accept(query, context, cid, ch, user)
+            return
+        if action == "no":
+            if user.id not in (ch["a"], ch["b"]):
+                await query.answer("This is not your match.", show_alert=True)
+                return
+            _end_match(cid)
+            await query.answer("Challenge cancelled.")
+            try:
+                await query.edit_message_text("Challenge cancelled.")
+            except BadRequest:
+                pass
+            return
+        if action == "r":
+            await _on_rps_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
+            return
+        if action == "c":
+            n = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+            await _on_cricket_pick(query, context, cid, ch, user, n)
+            return
+        if action == "t":
+            await _on_toss_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
+            return
+        if action == "f":
+            col = int(parts[3]) - 1 if len(parts) > 3 and parts[3].isdigit() else -1
+            await on_four_drop(query, context, cid, ch, user, col)
+            return
+        if action == "p":
+            await on_penalty_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
+            return
+        if action == "v":
+            await on_vault_pick(query, context, cid, ch, user, parts[3] if len(parts) > 3 else "")
+            return
+        await query.answer()
 
 
 async def _on_accept(query, context, cid: str, ch: dict, user: User) -> None:
@@ -629,13 +689,13 @@ async def _on_accept(query, context, cid: str, ch: dict, user: User) -> None:
         await query.answer("Only the person who was challenged can accept.", show_alert=True)
         return
     ch["status"] = "live"
-    ch["expires"] = time.time() + 300
+    _save_match(cid, ch)
     kind = ch["kind"]
     if kind == "dice":
         try:
             await _run_dice_duel(query, context, ch)
         finally:
-            _challenges.pop(cid, None)
+            _end_match(cid)
         return
     if kind == "toss":
         await query.answer("Call heads or tails.")
@@ -648,6 +708,7 @@ async def _on_accept(query, context, cid: str, ch: dict, user: User) -> None:
             line="Both call the coin. It flips once both have locked.",
             waiting="Your call locks. You cannot change it.",
         )
+        _save_match(cid, ch)
         await send_or_edit_card(query, png, f"{mention(query.from_user)} — toss is live.", _toss_markup(cid))
         return
     if kind == "rps":
@@ -661,11 +722,13 @@ async def _on_accept(query, context, cid: str, ch: dict, user: User) -> None:
             line="Secret picks. Revealed when both have locked.",
             waiting="Tap once. Your hand is locked for this round.",
         )
+        _save_match(cid, ch)
         await send_or_edit_card(query, png, "Match live. Choose below.", _rps_markup(cid))
         return
     if kind == "cricket":
         await query.answer("You bat second. Challenger bats first.")
         ch["event"] = "Challenger bats first. Both pick 1–6."
+        _save_match(cid, ch)
         await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
         return
     if kind == "four":
@@ -697,15 +760,16 @@ async def _show_cricket(query, context, cid: str, ch: dict, *, markup=None) -> N
     name_a = await _short_name(context, chat_id, ch["a"])
     name_b = await _short_name(context, chat_id, ch["b"])
     waiting = ch.get("waiting") or "Both pick a number. The first tap locks that ball."
+    first = ch.get("first_innings")
     png = render_cricket(
         name_a=name_a,
         name_b=name_b,
-        score_a=ch["score_a"],
-        score_b=ch["score_b"],
+        score_a=int(ch["score_a"] or 0),
+        score_b=int(ch["score_b"] or 0),
         batter_is_a=ch["batter"] == ch["a"],
-        innings=ch["innings"],
-        ball=ch["balls"] + 1,
-        target=ch.get("first_innings"),
+        innings=int(ch["innings"] or 1),
+        ball=int(ch["balls"] or 0) + 1,
+        target=None if first is None else int(first),
         event=ch.get("event") or "Both pick 1–6. Same number is OUT.",
         waiting=waiting,
     )
@@ -716,7 +780,10 @@ async def _show_cricket(query, context, cid: str, ch: dict, *, markup=None) -> N
         f"<b>Batting:</b> {bat}\n"
         f"{a_m} {ch['score_a']}  ·  {b_m} {ch['score_b']}"
     )
-    await send_or_edit_card(query, png, caption, markup)
+    try:
+        await send_or_edit_card(query, png, caption, markup)
+    except Exception:
+        log.exception("cricket card send failed")
 
 
 async def _finish_cricket(query, context, cid: str, ch: dict, event: str) -> None:
@@ -749,7 +816,7 @@ async def _finish_cricket(query, context, cid: str, ch: dict, event: str) -> Non
         detail = f"{sa} – {sb}   ·   {event}"
         winner = "Tie — both +20"
     png = render_result(title="Hand cricket", headline=headline, detail=detail, accent=(34, 140, 90, 255))
-    _challenges.pop(cid, None)
+    _end_match(cid)
     await send_or_edit_card(
         query,
         png,
@@ -813,11 +880,14 @@ async def _on_toss_pick(query, context, cid, ch, user, face: str) -> None:
     if user.id not in (ch["a"], ch["b"]) or face not in {"heads", "tails"}:
         await query.answer("This is not your toss.", show_alert=True)
         return
+    if ch.get("status") != "live":
+        await query.answer("Accept the challenge first.", show_alert=True)
+        return
     if str(user.id) in ch["picks"]:
         await query.answer("Already locked.", show_alert=True)
         return
     ch["picks"][str(user.id)] = face
-    ch["expires"] = time.time() + 300
+    _save_match(cid, ch)
     if len(ch["picks"]) < 2:
         await query.answer(f"Locked {face}. Waiting for the other call.")
         return
@@ -841,7 +911,7 @@ async def _on_toss_pick(query, context, cid, ch, user, face: str) -> None:
         _award(chat_id, ch["a"], 6, win=False, kind="toss")
         _award(chat_id, ch["b"], 6, win=False, kind="toss")
         extra = "Both missed. The coin was the other side."
-    _challenges.pop(cid, None)
+    _end_match(cid)
     png = render_result(title="Toss", headline=coin.upper(), detail=extra)
     await send_or_edit_card(
         query,
@@ -855,11 +925,14 @@ async def _on_rps_pick(query, context, cid, ch, user, hand: str) -> None:
     if user.id not in (ch["a"], ch["b"]) or hand not in RPS:
         await query.answer("This is not your match.", show_alert=True)
         return
+    if ch.get("status") != "live":
+        await query.answer("Accept the challenge first.", show_alert=True)
+        return
     if str(user.id) in ch["picks"]:
         await query.answer("Already locked.", show_alert=True)
         return
     ch["picks"][str(user.id)] = hand
-    ch["expires"] = time.time() + 300
+    _save_match(cid, ch)
     if len(ch["picks"]) < 2:
         await query.answer("Locked. Waiting for the other player.")
         return
@@ -884,7 +957,7 @@ async def _on_rps_pick(query, context, cid, ch, user, hand: str) -> None:
         _award(chat_id, ch["a"], 8, win=False, kind="rps")
         outcome = f"{b_m} wins. +25 / +8"
         headline = f"{b_n} wins"
-    _challenges.pop(cid, None)
+    _end_match(cid)
     png = render_result(
         title="Stone · Paper · Scissors",
         headline=headline,
@@ -909,18 +982,29 @@ async def _on_cricket_pick(query, context, cid, ch, user, n: int) -> None:
         await query.answer("Locked for this ball. You cannot change it.", show_alert=True)
         return
     ch["picks"][str(user.id)] = n
-    ch["expires"] = time.time() + 300
+    _save_match(cid, ch)
     other = ch["b"] if user.id == ch["a"] else ch["a"]
     if len(ch["picks"]) < 2:
+        innings, balls = int(ch["innings"] or 1), int(ch["balls"] or 0)
         other_n = await _short_name(context, ch["chat_id"], other)
         you = await _short_name(context, ch["chat_id"], user.id)
-        ch["waiting"] = f"{you} locked. Waiting for {other_n}."
-        ch["event"] = "One shot locked. Number stays hidden until both play."
+        fresh = _get_match(cid)
+        if (
+            not fresh
+            or int(fresh.get("innings") or 1) != innings
+            or int(fresh.get("balls") or 0) != balls
+            or len(fresh.get("picks") or {}) >= 2
+        ):
+            await query.answer("Locked.")
+            return
+        fresh["waiting"] = f"{you} locked. Waiting for {other_n}."
+        fresh["event"] = "One shot locked. Number stays hidden until both play."
+        _save_match(cid, fresh)
         await query.answer("Locked. Waiting for the other player.")
-        await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
+        await _show_cricket(query, context, cid, fresh, markup=_hand_markup(cid))
         return
 
-    pa, pb = ch["picks"][str(ch["a"])], ch["picks"][str(ch["b"])]
+    pa, pb = int(ch["picks"][str(ch["a"])]), int(ch["picks"][str(ch["b"])])
     ch["picks"] = {}
     batter = ch["batter"]
     bat_n = pa if batter == ch["a"] else pb
@@ -928,43 +1012,49 @@ async def _on_cricket_pick(query, context, cid, ch, user, n: int) -> None:
     out = bat_n == bowl_n
     if not out:
         key = "score_a" if batter == ch["a"] else "score_b"
-        ch[key] += bat_n
-        ch["balls"] += 1
+        ch[key] = int(ch.get(key) or 0) + bat_n
+        ch["balls"] = int(ch.get("balls") or 0) + 1
         ch["event"] = f"Last ball  {bat_n} vs {bowl_n}  ·  +{bat_n} runs"
     else:
         ch["event"] = f"OUT  ·  both played {bat_n}"
         ch["balls"] = 6
 
-    chase_score = ch["score_a"] if batter == ch["a"] else ch["score_b"]
-    if ch["innings"] == 2 and ch.get("first_innings") is not None:
-        if chase_score > ch["first_innings"]:
+    chase_score = int((ch["score_a"] if batter == ch["a"] else ch["score_b"]) or 0)
+    innings = int(ch.get("innings") or 1)
+    first = ch.get("first_innings")
+    if innings == 2 and first is not None:
+        if chase_score > int(first):
+            _save_match(cid, ch)
             await _finish_cricket(query, context, cid, ch, f"{ch['event']}. Target passed.")
             return
 
-    innings_over = out or ch["balls"] >= 6
+    innings_over = out or int(ch.get("balls") or 0) >= 6
     if innings_over:
-        if ch["innings"] == 1:
-            ch["first_innings"] = ch["score_a"] if batter == ch["a"] else ch["score_b"]
+        if innings == 1:
+            ch["first_innings"] = int((ch["score_a"] if batter == ch["a"] else ch["score_b"]) or 0)
             ch["innings"] = 2
             ch["balls"] = 0
             ch["batter"] = ch["b"] if batter == ch["a"] else ch["a"]
-            target = ch["first_innings"]
+            target = int(ch["first_innings"] or 0)
             ch["waiting"] = f"Target {target + 1}. Chase starts now."
             ch["event"] = f"{ch['event']}. First innings {target}. Need {target + 1} to win."
+            _save_match(cid, ch)
             await query.answer("Innings over. Chase begins.")
             await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
             return
-        first = ch.get("first_innings") or 0
+        first = int(ch.get("first_innings") or 0)
         if chase_score > first:
             why = "Target passed."
         elif chase_score == first:
             why = "Scores level."
         else:
             why = "Chase fell short."
+        _save_match(cid, ch)
         await _finish_cricket(query, context, cid, ch, f"{ch['event']}. {why}")
         return
 
     ch["waiting"] = "Both pick again. Your next tap locks this ball."
+    _save_match(cid, ch)
     await query.answer(ch["event"])
     await _show_cricket(query, context, cid, ch, markup=_hand_markup(cid))
 

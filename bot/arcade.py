@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import time
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, User
 
 from bot.gameui import render_four, render_penalty, render_result, render_vault, send_or_edit_card
@@ -80,11 +78,12 @@ def _full(board: str) -> bool:
 
 
 async def start_four(query, context, cid: str, ch: dict) -> None:
-    from bot.games import _short_name
+    from bot.games import _save_match, _short_name
 
     ch["board"] = _EMPTY
     ch["turn"] = ch["a"]
     ch["event"] = "Challenger drops first. Four in a line wins."
+    _save_match(cid, ch)
     await query.answer("Four in a row. You drop second.")
     await _show_four(query, context, cid, ch)
 
@@ -115,7 +114,7 @@ async def _show_four(query, context, cid: str, ch: dict) -> None:
 
 
 async def on_four_drop(query, context, cid: str, ch: dict, user: User, col: int) -> None:
-    from bot.games import _award, _challenges, _short_name
+    from bot.games import _save_match, _short_name
 
     if user.id not in (ch["a"], ch["b"]) or col not in range(7):
         await query.answer("This is not your match.", show_alert=True)
@@ -132,7 +131,7 @@ async def on_four_drop(query, context, cid: str, ch: dict, user: User, col: int)
         await query.answer("That column is full.", show_alert=True)
         return
     ch["board"] = nxt
-    ch["expires"] = time.time() + 300
+    _save_match(cid, ch)
     you = await _short_name(context, ch["chat_id"], user.id)
     if _won(nxt, piece):
         await _finish_duel(
@@ -165,6 +164,7 @@ async def on_four_drop(query, context, cid: str, ch: dict, user: User, col: int)
     ch["turn"] = ch["b"] if user.id == ch["a"] else ch["a"]
     other = await _short_name(context, ch["chat_id"], ch["turn"])
     ch["event"] = f"{you} dropped in column {col + 1}. {other} to play."
+    _save_match(cid, ch)
     await query.answer(f"Column {col + 1}.")
     await _show_four(query, context, cid, ch)
 
@@ -178,6 +178,9 @@ async def start_penalty(query, context, cid: str, ch: dict) -> None:
     ch["picks"] = {}
     ch["event"] = "Challenger shoots first. Pick a side — it locks."
     ch["waiting"] = "Shooter and keeper both tap. Revealed together."
+    from bot.games import _save_match
+
+    _save_match(cid, ch)
     await query.answer("You keep first. Then you shoot.")
     await _show_penalty(query, context, cid, ch)
 
@@ -206,7 +209,7 @@ async def _show_penalty(query, context, cid: str, ch: dict, markup=True) -> None
 
 
 async def on_penalty_pick(query, context, cid: str, ch: dict, user: User, side: str) -> None:
-    from bot.games import _short_name
+    from bot.games import _get_match, _save_match, _short_name
 
     if user.id not in (ch["a"], ch["b"]) or side not in _SIDES:
         await query.answer("This is not your match.", show_alert=True)
@@ -218,12 +221,22 @@ async def on_penalty_pick(query, context, cid: str, ch: dict, user: User, side: 
         await query.answer("Already locked for this kick.", show_alert=True)
         return
     ch["picks"][str(user.id)] = side
-    ch["expires"] = time.time() + 300
+    _save_match(cid, ch)
     if len(ch["picks"]) < 2:
+        kicks = (int(ch.get("kicks_a") or 0), int(ch.get("kicks_b") or 0))
         you = await _short_name(context, ch["chat_id"], user.id)
-        ch["waiting"] = f"{you} locked. Waiting for the other side."
+        fresh = _get_match(cid)
+        if (
+            not fresh
+            or (int(fresh.get("kicks_a") or 0), int(fresh.get("kicks_b") or 0)) != kicks
+            or len(fresh.get("picks") or {}) >= 2
+        ):
+            await query.answer("Locked. Waiting.")
+            return
+        fresh["waiting"] = f"{you} locked. Waiting for the other side."
+        _save_match(cid, fresh)
         await query.answer("Locked. Waiting.")
-        await _show_penalty(query, context, cid, ch)
+        await _show_penalty(query, context, cid, fresh)
         return
 
     pa, pb = ch["picks"][str(ch["a"])], ch["picks"][str(ch["b"])]
@@ -234,16 +247,17 @@ async def on_penalty_pick(query, context, cid: str, ch: dict, user: User, side: 
     goal = shot != keep
     if goal:
         if shooter == ch["a"]:
-            ch["goals_a"] += 1
+            ch["goals_a"] = int(ch.get("goals_a") or 0) + 1
         else:
-            ch["goals_b"] += 1
+            ch["goals_b"] = int(ch.get("goals_b") or 0) + 1
         ch["event"] = f"GOAL  ·  shot {_SIDES[shot]}  ·  keep {_SIDES[keep]}"
     else:
         ch["event"] = f"SAVE  ·  both went {_SIDES[shot]}"
     if shooter == ch["a"]:
-        ch["kicks_a"] += 1
+        ch["kicks_a"] = int(ch.get("kicks_a") or 0) + 1
     else:
-        ch["kicks_b"] += 1
+        ch["kicks_b"] = int(ch.get("kicks_b") or 0) + 1
+    _save_match(cid, ch)
 
     ga, gb = ch["goals_a"], ch["goals_b"]
     ka, kb = ch["kicks_a"], ch["kicks_b"]
@@ -275,6 +289,7 @@ async def on_penalty_pick(query, context, cid: str, ch: dict, user: User, side: 
     ch["shooter"] = ch["b"] if shooter == ch["a"] else ch["a"]
     nxt = await _short_name(context, ch["chat_id"], ch["shooter"])
     ch["waiting"] = f"{nxt} shoots next. Both pick again."
+    _save_match(cid, ch)
     await query.answer(ch["event"])
     await _show_penalty(query, context, cid, ch)
 
@@ -294,7 +309,7 @@ def _penalty_winner(ga: int, gb: int, ka: int, kb: int) -> str | None:
 
 
 async def start_vault(query, context, cid: str, ch: dict) -> None:
-    from bot.games import _short_name
+    from bot.games import _save_match, _short_name
 
     ch["picks"] = {}
     a_n = await _short_name(context, ch["chat_id"], ch["a"])
@@ -305,6 +320,7 @@ async def start_vault(query, context, cid: str, ch: dict) -> None:
         line="One pot. Share splits it. Take tries to keep it all.",
         waiting="If both Take, the pot is empty. Picks lock.",
     )
+    _save_match(cid, ch)
     await query.answer("Share or Take. You cannot change it.")
     await send_or_edit_card(
         query,
@@ -318,11 +334,16 @@ async def on_vault_pick(query, context, cid: str, ch: dict, user: User, move: st
     if user.id not in (ch["a"], ch["b"]) or move not in {"share", "take"}:
         await query.answer("This is not your match.", show_alert=True)
         return
+    if ch.get("status") != "live":
+        await query.answer("Accept first.", show_alert=True)
+        return
     if str(user.id) in ch["picks"]:
         await query.answer("Already locked.", show_alert=True)
         return
     ch["picks"][str(user.id)] = move
-    ch["expires"] = time.time() + 300
+    from bot.games import _save_match
+
+    _save_match(cid, ch)
     if len(ch["picks"]) < 2:
         await query.answer("Locked. Waiting for the other call.")
         return
@@ -367,7 +388,7 @@ async def _finish_duel(
     lose_pts: int,
     kind: str,
 ) -> None:
-    from bot.games import _award, _challenges, _short_name
+    from bot.games import _award, _end_match, _short_name
 
     try:
         await query.answer()
@@ -395,7 +416,7 @@ async def _finish_duel(
         headline = "Draw"
         cap_w = "Draw"
     png = render_result(title=title, headline=headline, detail=event)
-    _challenges.pop(cid, None)
+    _end_match(cid)
     await send_or_edit_card(
         query,
         png,
