@@ -22,10 +22,6 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('notes')}</b> · send <code>#name</code> for a saved note\n"
             f"<b>{cmd('staff')}</b> — reply to ping admins\n"
             f"<b>{cmd('whatsnew')}</b> — latest official update\n\n"
-            "<b>Games</b> (tap Games)\n"
-            f"{cmd('daily')} · {cmd('toss')} · {cmd('dice')} · {cmd('lucky7')}\n"
-            f"{cmd('rps')} · {cmd('cricket')} · {cmd('four')} · {cmd('penalty')}\n"
-            f"{cmd('vault')} · {cmd('top')} · {cmd('gamehelp')}\n\n"
             "<b>Fun</b> — whisper, scold, calculator (tap Fun)\n\n"
             "Mute / ban / lock / raid tools are not listed here. "
             "Admins and owners see extra buttons."
@@ -48,31 +44,6 @@ def _pages() -> dict[str, str]:
             f"<code>{cmd('whatsnew')} history</code>\n\n"
             "<b>Calculator</b> — send only the sum, no command.\n"
             "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>"
-        ),
-        "games": (
-            "<b>Games</b>\n"
-            "Play in the group. Coins are for fun only — no real money. "
-            "Scores use India time (IST). Full how-to: "
-            f"<code>{cmd('gamehelp')}</code> (buttons per game).\n\n"
-            f"<b>{cmd('daily')}</b> — once a day, streak bonus\n"
-            f"<b>{cmd('balance')}</b> — coins, wins, points\n"
-            f"<b>{cmd('top')}</b> — leaderboard\n"
-            f"<blockquote>{cmd('top')} today\n{cmd('top')} week\n{cmd('top')} wins\n"
-            f"{cmd('top')} cricket\n{cmd('top')} four\n{cmd('top')} penalty</blockquote>\n"
-            f"<b>{cmd('toss')}</b> — coin toss\n"
-            f"<blockquote>{cmd('toss')} heads\n{cmd('toss')} tails\n"
-            f"Reply {cmd('toss')} to challenge a friend</blockquote>\n"
-            f"<b>{cmd('dice')}</b> — Telegram 🎲 · reply to duel\n"
-            f"<b>{cmd('lucky7')}</b> — two dice, call low, 7, or high\n"
-            f"<blockquote>{cmd('lucky7')} low\n{cmd('lucky7')} 7\n"
-            f"{cmd('lucky7')} high</blockquote>\n"
-            f"<b>{cmd('rps')}</b> — stone / paper / scissors vs someone\n"
-            f"<b>{cmd('cricket')}</b> — hand cricket vs someone (1–6, same = out)\n"
-            f"<b>{cmd('four')}</b> — four in a row vs someone (visual board)\n"
-            f"<b>{cmd('penalty')}</b> — five kicks each, shooter vs keeper\n"
-            f"<b>{cmd('vault')}</b> — share the pot or take it all\n"
-            f"<blockquote>{cmd('four')} @username</blockquote>\n"
-            f"Also: {cmd('games')} · {cmd('gamehelp')} four · {cmd('balance')}"
         ),
         "fun": (
             "<b>Fun</b>\n\n"
@@ -203,7 +174,6 @@ def _markup(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
-            InlineKeyboardButton("Games", callback_data="help:games"),
             InlineKeyboardButton("Fun", callback_data="help:fun"),
             InlineKeyboardButton("Notes", callback_data="help:notes"),
         ],
@@ -253,16 +223,6 @@ _ALIASES = {
     "whisper": "fun",
     "scold": "fun",
     "fun": "fun",
-    "games": "games",
-    "game": "games",
-    "gamehelp": "games",
-    "daily": "games",
-    "toss": "games",
-    "dice": "games",
-    "lucky7": "games",
-    "rps": "games",
-    "cricket": "games",
-    "top": "games",
     "calc": "fun",
     "lock": "admins",
     "flood": "admins",

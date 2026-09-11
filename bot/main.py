@@ -27,21 +27,6 @@ from bot.commands import add_cmd, cmd, cmd_name
 from bot.config import BOT_TOKEN
 from bot.flood import cmd_flood, cmd_floodmute, on_flood
 from bot.fun import cmd_scold
-from bot.games import (
-    cmd_balance,
-    cmd_cricket,
-    cmd_daily,
-    cmd_dice,
-    cmd_four,
-    cmd_gamehelp,
-    cmd_lucky7,
-    cmd_penalty,
-    cmd_rps,
-    cmd_top,
-    cmd_toss,
-    cmd_vault,
-    on_game_callback,
-)
 from bot.handlers import (
     cmd_addowner,
     cmd_allowpack,
@@ -147,12 +132,6 @@ _MEMBER_COMMANDS = [
     ("notes", "Saved notes"),
     ("whisper", "Private note in the group"),
     ("scold", "Playful scolding"),
-    ("gamehelp", "How to play games"),
-    ("daily", "Daily game bonus"),
-    ("four", "Four in a row vs someone"),
-    ("penalty", "Penalty duel vs someone"),
-    ("vault", "Share or take the pot"),
-    ("top", "Game leaderboard"),
     ("whatsnew", "Latest official update"),
     ("stats", "Your status in this group"),
     ("notag", "Skip group pings"),
@@ -238,25 +217,12 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_tagall_callback, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_packs_callback, pattern=r"^pk:"))
     app.add_handler(CallbackQueryHandler(on_verify_callback, pattern=r"^vf:"))
-    app.add_handler(CallbackQueryHandler(on_game_callback, pattern=r"^gm:"))
     add_cmd(app, "whisper", cmd_whisper)
     add_cmd(app, "lock", cmd_lock)
     add_cmd(app, "unlock", cmd_unlock)
     add_cmd(app, "flood", cmd_flood)
     add_cmd(app, "floodmute", cmd_floodmute)
     add_cmd(app, "scold", cmd_scold)
-    add_cmd(app, ["gamehelp", "games", "game_help"], cmd_gamehelp)
-    add_cmd(app, "daily", cmd_daily)
-    add_cmd(app, ["top", "leaderboard"], cmd_top)
-    add_cmd(app, ["balance", "coins"], cmd_balance)
-    add_cmd(app, "toss", cmd_toss)
-    add_cmd(app, "dice", cmd_dice)
-    add_cmd(app, ["lucky7", "7up"], cmd_lucky7)
-    add_cmd(app, ["rps", "sps"], cmd_rps)
-    add_cmd(app, "cricket", cmd_cricket)
-    add_cmd(app, ["four", "connect4"], cmd_four)
-    add_cmd(app, ["penalty", "pk"], cmd_penalty)
-    add_cmd(app, ["vault", "heist"], cmd_vault)
     add_cmd(app, ["stats", "who", "user"], cmd_stats)
     add_cmd(app, ["tag", "nick"], cmd_tag)
     add_cmd(app, "tagall", cmd_tagall)

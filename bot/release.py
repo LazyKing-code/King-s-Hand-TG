@@ -13,103 +13,15 @@ from bot import db
 from bot.commands import cmd
 from bot.config import OWNER_IDS
 from bot.invite import bot_username, url_buttons
+from bot.release_data import add_note, load_notes  # noqa: F401  (add_note re-exported for callers)
 
 log = logging.getLogger(__name__)
 
-# Add a new entry at the bottom when you ship. The last id is broadcast once.
-_NOTES: list[dict] = [
-    {
-        "id": "2026-09-06.4",
-        "date": "6 September 2026",
-        "headline": "Commands, joins, and sticker reports",
-        "intro": (
-            "This release tightens everyday group behaviour. "
-            "Only what changed is listed below."
-        ),
-        "sections": [
-            (
-                "Command menu",
-                "Tapping a suggestion such as /help in a group now runs correctly "
-                "when Telegram inserts the bot username (/help@BotName).",
-            ),
-            (
-                "Telegram bots",
-                "Bots you add from BotFather are no longer kicked on join. "
-                "Join verification still applies to people. "
-                "Raidmode still stops flood joins, not official bots.",
-            ),
-            (
-                "Member status",
-                f"{cmd('stats')} (reply or @username) now shows immune, trusted, "
-                "approved, and sticker warnings as separate fields.",
-            ),
-            (
-                "Sticker reports",
-                f"A {cmd('report')} now bans that sticker and its pack, and is "
-                "enforced for members and admins. "
-                f"Only the owner can {cmd('unreport')} or {cmd('unreportall')} confirm. "
-                "Removal notices tag the sender; rapid spam is grouped into one message.",
-            ),
-            (
-                "Admin demote",
-                "Three banned-sticker warnings still demote an admin this bot promoted "
-                f"with {cmd('makeadmin')}. The next banned sticker after that is a kick.",
-            ),
-        ],
-    },
-    {
-        "id": "2026-09-07.1",
-        "date": "7 September 2026",
-        "headline": "Hand cricket and game cards",
-        "intro": (
-            "This update is about match rules and how games look in the group. "
-            "Only what changed is listed below."
-        ),
-        "sections": [
-            (
-                "Hand cricket",
-                "If you are out for 0, the other side only needs 1 to win. "
-                "The chase now ends as soon as that target is passed — they do not keep batting to 18. "
-                "Your number locks for that ball and cannot be changed.",
-            ),
-            (
-                "Scoreboard cards",
-                "Cricket, toss, lucky 7, and duels post a graphic card with both player names, "
-                "score, and who is batting.",
-            ),
-        ],
-    },
-    {
-        "id": "2026-09-07.2",
-        "date": "7 September 2026",
-        "headline": "New games and per-game boards",
-        "intro": (
-            "Three new two-player games, and a wins/losses board for each game. "
-            "Only what changed is listed below."
-        ),
-        "sections": [
-            (
-                "Four in a row",
-                f"{cmd('four')} @username — a visible board. Drop in columns 1–7. "
-                "First to four in a line wins.",
-            ),
-            (
-                "Penalty duel",
-                f"{cmd('penalty')} — five kicks each. Shooter and keeper pick Left, Centre, or Right. "
-                "Same side is a save.",
-            ),
-            (
-                "The vault",
-                f"{cmd('vault')} — both lock Share or Take. Split, steal, or both walk away empty.",
-            ),
-            (
-                "Per-game leaderboard",
-                f"{cmd('top')} cricket, {cmd('top')} four, {cmd('top')} penalty, and the other games "
-                f"show wins, losses, and draws. {cmd('balance')} lists your line for each.",
-            ),
-        ],
-    },
-]
+# Notes live in bot/release_notes.json, not here. Add a new one with:
+#   python scripts/add_release_note.py "Headline" "Title::Body" "Title 2::Body 2"
+# The newest entry in that file is the one broadcast to everyone who has
+# /start'd the bot, the next time it restarts (or via /release send).
+_NOTES: list[dict] = load_notes()
 
 
 def current_note() -> dict:
@@ -155,10 +67,7 @@ def history_html() -> str:
 
 def _notes_markup(username: str | None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton("Open /help", callback_data="help:index"),
-            InlineKeyboardButton("Games guide", callback_data="gm:h:index"),
-        ]
+        [InlineKeyboardButton("Open /help", callback_data="help:index")]
     ]
     if username:
         rows.extend(url_buttons(username).inline_keyboard)

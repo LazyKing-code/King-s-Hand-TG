@@ -783,9 +783,6 @@ async def cmd_makeadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "(I can only change people I promoted)."
         )
         return
-    if target.is_bot:
-        await update.effective_message.reply_text("I cannot promote a bot this way.")
-        return
     try:
         await promote_limited(context, update.effective_chat, target.id)
         db.reset_strikes(update.effective_chat.id, target.id)

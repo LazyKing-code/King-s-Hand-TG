@@ -1,0 +1,98 @@
+[
+  {
+    "id": "2026-09-06.4",
+    "date": "6 September 2026",
+    "headline": "Commands, joins, and sticker reports",
+    "intro": "This release tightens everyday group behaviour. Only what changed is listed below.",
+    "sections": [
+      [
+        "Command menu",
+        "Tapping a suggestion such as /help in a group now runs correctly when Telegram inserts the bot username (/help@BotName)."
+      ],
+      [
+        "Telegram bots",
+        "Bots you add from BotFather are no longer kicked on join. Join verification still applies to people. Raidmode still stops flood joins, not official bots."
+      ],
+      [
+        "Member status",
+        "/stats (reply or @username) now shows immune, trusted, approved, and sticker warnings as separate fields."
+      ],
+      [
+        "Sticker reports",
+        "A /report now bans that sticker and its pack, and is enforced for members and admins. Only the owner can /unreport or /unreportall confirm. Removal notices tag the sender; rapid spam is grouped into one message."
+      ],
+      [
+        "Admin demote",
+        "Three banned-sticker warnings still demote an admin this bot promoted with /makeadmin. The next banned sticker after that is a kick."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-07.1",
+    "date": "7 September 2026",
+    "headline": "Hand cricket and game cards",
+    "intro": "This update is about match rules and how games look in the group. Only what changed is listed below.",
+    "sections": [
+      [
+        "Hand cricket",
+        "If you are out for 0, the other side only needs 1 to win. The chase now ends as soon as that target is passed — they do not keep batting to 18. Your number locks for that ball and cannot be changed."
+      ],
+      [
+        "Scoreboard cards",
+        "Cricket, toss, lucky 7, and duels post a graphic card with both player names, score, and who is batting."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-07.2",
+    "date": "7 September 2026",
+    "headline": "New games and per-game boards",
+    "intro": "Three new two-player games, and a wins/losses board for each game. Only what changed is listed below.",
+    "sections": [
+      [
+        "Four in a row",
+        "/four @username — a visible board. Drop in columns 1–7. First to four in a line wins."
+      ],
+      [
+        "Penalty duel",
+        "/penalty — five kicks each. Shooter and keeper pick Left, Centre, or Right. Same side is a save."
+      ],
+      [
+        "The vault",
+        "/vault — both lock Share or Take. Split, steal, or both walk away empty."
+      ],
+      [
+        "Per-game leaderboard",
+        "/top cricket, /top four, /top penalty, and the other games show wins, losses, and draws. /balance lists your line for each."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.1",
+    "date": "11 September 2026",
+    "headline": "Games removed for a rebuild",
+    "intro": "All games, coins, and per-game boards are removed while they get rebuilt cleanly. Only what changed is listed below.",
+    "sections": [
+      [
+        "Games and leaderboard",
+        "Daily bonus, toss, dice, lucky 7, hand cricket, four in a row, penalty duel, the vault, balances, and every leaderboard are gone for now. This clears out bugs found in the old game engine."
+      ],
+      [
+        "Everything else",
+        "Moderation, verify, notes, whisper, scold, and the calculator are unaffected."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.2",
+    "date": "11 September 2026",
+    "headline": "Makeadmin now works on bots",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Promoting a bot",
+        "/makeadmin can now promote a bot the same way it promotes a person - reply to it or tag it. It still only touches admins it promoted itself."
+      ]
+    ]
+  }
+]

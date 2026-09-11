@@ -1,0 +1,25 @@
+---
+description: Add a release note for every user-facing bot change
+alwaysApply: true
+---
+
+# Release notes must stay dynamic
+
+`bot/release_notes.json` is broadcast automatically to every user who has
+`/start`'d the bot (on next restart, or via `/release send`). It only updates
+when a new entry is appended — nothing sends unless one exists.
+
+Whenever you finish a change to this bot that a member or admin would notice
+(new/changed/removed command, changed rule or behavior, changed message
+copy), append a release note **before** ending the turn:
+
+```
+python scripts/add_release_note.py "Short headline" "Section title::One short paragraph, written for the person using the bot, not a commit message."
+```
+
+- Multiple `"Title::Body"` sections are allowed; one per distinct change.
+- Do not hand-edit `bot/release_notes.json` or `bot/release.py`'s notes —
+  always go through the script so the id/date and format stay consistent.
+- Skip this for internal-only changes with zero user-visible effect (e.g.
+  refactors, comments, dev tooling, this rule file itself).
+- Do not run `/release send` yourself; that's the owner's call in Telegram.
