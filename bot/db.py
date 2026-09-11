@@ -271,6 +271,10 @@ def init() -> None:
         _ensure_column(conn, "chat_settings", "verify_secs", "INTEGER")
         _ensure_column(conn, "chat_settings", "verify_ban_bots", "INTEGER")
         _ensure_column(conn, "chat_settings", "zombies_daily", "INTEGER")
+        _ensure_column(conn, "giveaways", "winner_ids", "TEXT")
+        _ensure_column(conn, "giveaways", "claimed_ids", "TEXT")
+        _ensure_column(conn, "giveaways", "confirmed_ids", "TEXT")
+        _ensure_column(conn, "giveaways", "claim_message_id", "INTEGER")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, spec: str) -> None:
@@ -1706,6 +1710,48 @@ def get_user_activity(chat_id: int, user_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _parse_id_list(raw) -> list[int]:
+    try:
+        data = json.loads(raw) if raw else []
+    except (json.JSONDecodeError, TypeError):
+        data = []
+    if not isinstance(data, list):
+        return []
+    out: list[int] = []
+    for item in data:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _giveaway_from_row(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "chat_id": int(row["chat_id"]),
+        "prize": str(row["prize"]),
+        "end_time": float(row["end_time"]),
+        "winner_count": int(row["winner_count"]),
+        "min_messages": int(row["min_messages"] or 0),
+        "min_account_age_days": int(row["min_account_age_days"] or 0),
+        "require_verified": bool(row["require_verified"]),
+        "participants": _parse_id_list(row["participants"]),
+        "status": str(row["status"]),
+        "message_id": int(row["message_id"]) if row["message_id"] else None,
+        "created_by": int(row["created_by"]),
+        "created_at": float(row["created_at"]),
+        "winner_ids": _parse_id_list(row["winner_ids"] if "winner_ids" in row.keys() else None),
+        "claimed_ids": _parse_id_list(row["claimed_ids"] if "claimed_ids" in row.keys() else None),
+        "confirmed_ids": _parse_id_list(row["confirmed_ids"] if "confirmed_ids" in row.keys() else None),
+        "claim_message_id": (
+            int(row["claim_message_id"])
+            if "claim_message_id" in row.keys() and row["claim_message_id"]
+            else None
+        ),
+    }
+
+
 def create_giveaway(
     giveaway_id: str,
     chat_id: int,
@@ -1724,8 +1770,9 @@ def create_giveaway(
             INSERT INTO giveaways(
                 id, chat_id, prize, end_time, winner_count,
                 min_messages, min_account_age_days, require_verified,
-                participants, status, created_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', ?, ?)
+                participants, status, created_by, created_at,
+                winner_ids, claimed_ids, confirmed_ids
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', ?, ?, '[]', '[]', '[]')
             """,
             (
                 giveaway_id, chat_id, prize, end_time, winner_count,
@@ -1742,25 +1789,34 @@ def load_giveaway(giveaway_id: str) -> dict | None:
         ).fetchone()
     if not row:
         return None
-    try:
-        participants = json.loads(row["participants"])
-    except (json.JSONDecodeError, TypeError):
-        participants = []
-    return {
-        "id": str(row["id"]),
-        "chat_id": int(row["chat_id"]),
-        "prize": str(row["prize"]),
-        "end_time": float(row["end_time"]),
-        "winner_count": int(row["winner_count"]),
-        "min_messages": int(row["min_messages"] or 0),
-        "min_account_age_days": int(row["min_account_age_days"] or 0),
-        "require_verified": bool(row["require_verified"]),
-        "participants": participants if isinstance(participants, list) else [],
-        "status": str(row["status"]),
-        "message_id": int(row["message_id"]) if row["message_id"] else None,
-        "created_by": int(row["created_by"]),
-        "created_at": float(row["created_at"]),
-    }
+    data = _giveaway_from_row(row)
+    if data["status"] == "finished" and not data["winner_ids"]:
+        with cursor() as conn:
+            hist = conn.execute(
+                """
+                SELECT winner_ids FROM giveaway_history
+                WHERE giveaway_id=?
+                ORDER BY drawn_at DESC LIMIT 1
+                """,
+                (giveaway_id,),
+            ).fetchone()
+        if hist:
+            data["winner_ids"] = _parse_id_list(hist["winner_ids"])
+    return data
+
+
+def find_giveaway_by_message(chat_id: int, message_id: int) -> dict | None:
+    with cursor() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM giveaways
+            WHERE chat_id=? AND (message_id=? OR claim_message_id=?)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (chat_id, message_id, message_id),
+        ).fetchone()
+    return _giveaway_from_row(row) if row else None
 
 
 def add_giveaway_participant(giveaway_id: str, user_id: int) -> bool:
@@ -1771,13 +1827,10 @@ def add_giveaway_participant(giveaway_id: str, user_id: int) -> bool:
         ).fetchone()
         if not row:
             return False
-        try:
-            participants = json.loads(row["participants"])
-        except (json.JSONDecodeError, TypeError):
-            participants = []
-        if user_id in participants:
+        participants = _parse_id_list(row["participants"])
+        if int(user_id) in participants:
             return False
-        participants.append(user_id)
+        participants.append(int(user_id))
         conn.execute(
             "UPDATE giveaways SET participants=? WHERE id=?",
             (json.dumps(participants), giveaway_id),
@@ -1789,6 +1842,14 @@ def set_giveaway_message(giveaway_id: str, message_id: int) -> None:
     with cursor() as conn:
         conn.execute(
             "UPDATE giveaways SET message_id=? WHERE id=?",
+            (message_id, giveaway_id),
+        )
+
+
+def set_claim_message(giveaway_id: str, message_id: int) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE giveaways SET claim_message_id=? WHERE id=?",
             (message_id, giveaway_id),
         )
 
@@ -1812,28 +1873,7 @@ def list_active_giveaways(chat_id: int | None = None) -> list[dict]:
             rows = conn.execute(
                 "SELECT * FROM giveaways WHERE status='active' ORDER BY end_time"
             ).fetchall()
-    result = []
-    for row in rows:
-        try:
-            participants = json.loads(row["participants"])
-        except (json.JSONDecodeError, TypeError):
-            participants = []
-        result.append({
-            "id": str(row["id"]),
-            "chat_id": int(row["chat_id"]),
-            "prize": str(row["prize"]),
-            "end_time": float(row["end_time"]),
-            "winner_count": int(row["winner_count"]),
-            "min_messages": int(row["min_messages"] or 0),
-            "min_account_age_days": int(row["min_account_age_days"] or 0),
-            "require_verified": bool(row["require_verified"]),
-            "participants": participants if isinstance(participants, list) else [],
-            "status": str(row["status"]),
-            "message_id": int(row["message_id"]) if row["message_id"] else None,
-            "created_by": int(row["created_by"]),
-            "created_at": float(row["created_at"]),
-        })
-    return result
+    return [_giveaway_from_row(row) for row in rows]
 
 
 def finish_giveaway(
@@ -1844,10 +1884,18 @@ def finish_giveaway(
     giveaway = load_giveaway(giveaway_id)
     if not giveaway:
         return
+    winners = [int(x) for x in winner_ids]
     with cursor() as conn:
         conn.execute(
-            "UPDATE giveaways SET status='finished' WHERE id=?",
-            (giveaway_id,),
+            """
+            UPDATE giveaways
+            SET status='finished',
+                winner_ids=?,
+                claimed_ids='[]',
+                confirmed_ids='[]'
+            WHERE id=?
+            """,
+            (json.dumps(winners), giveaway_id),
         )
         conn.execute(
             """
@@ -1859,12 +1907,96 @@ def finish_giveaway(
                 giveaway_id,
                 giveaway["chat_id"],
                 giveaway["prize"],
-                json.dumps(winner_ids),
+                json.dumps(winners),
                 len(giveaway["participants"]),
                 time.time(),
                 reroll_count,
             ),
         )
+
+
+def reroll_giveaway_winners(giveaway_id: str, winner_ids: list[int]) -> int:
+    """Replace winners on a finished giveaway. Returns new reroll_count (0 if failed)."""
+    giveaway = load_giveaway(giveaway_id)
+    if not giveaway or giveaway["status"] != "finished":
+        return 0
+    winners = [int(x) for x in winner_ids]
+    with cursor() as conn:
+        row = conn.execute(
+            """
+            SELECT reroll_count FROM giveaway_history
+            WHERE giveaway_id=?
+            ORDER BY drawn_at DESC LIMIT 1
+            """,
+            (giveaway_id,),
+        ).fetchone()
+        reroll_count = int(row["reroll_count"] if row else 0) + 1
+        conn.execute(
+            """
+            UPDATE giveaways
+            SET winner_ids=?, claimed_ids='[]', confirmed_ids='[]'
+            WHERE id=?
+            """,
+            (json.dumps(winners), giveaway_id),
+        )
+        conn.execute(
+            """
+            UPDATE giveaway_history
+            SET winner_ids=?, reroll_count=?
+            WHERE giveaway_id=? AND drawn_at=(
+                SELECT MAX(drawn_at) FROM giveaway_history WHERE giveaway_id=?
+            )
+            """,
+            (json.dumps(winners), reroll_count, giveaway_id, giveaway_id),
+        )
+    return reroll_count
+
+
+def claim_giveaway(giveaway_id: str, user_id: int) -> str:
+    """Winner claims prize. Returns ok|not_winner|already|missing|bad_status."""
+    giveaway = load_giveaway(giveaway_id)
+    if not giveaway:
+        return "missing"
+    if giveaway["status"] != "finished":
+        return "bad_status"
+    uid = int(user_id)
+    if uid not in giveaway["winner_ids"]:
+        return "not_winner"
+    if uid in giveaway["claimed_ids"] or uid in giveaway["confirmed_ids"]:
+        return "already"
+    claimed = list(giveaway["claimed_ids"])
+    claimed.append(uid)
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE giveaways SET claimed_ids=? WHERE id=?",
+            (json.dumps(claimed), giveaway_id),
+        )
+    return "ok"
+
+
+def confirm_giveaway_winner(giveaway_id: str, user_id: int) -> str:
+    """Admin confirms a winner received the prize. Returns ok|not_winner|already|missing|bad_status."""
+    giveaway = load_giveaway(giveaway_id)
+    if not giveaway:
+        return "missing"
+    if giveaway["status"] != "finished":
+        return "bad_status"
+    uid = int(user_id)
+    if uid not in giveaway["winner_ids"]:
+        return "not_winner"
+    if uid in giveaway["confirmed_ids"]:
+        return "already"
+    confirmed = list(giveaway["confirmed_ids"])
+    confirmed.append(uid)
+    claimed = list(giveaway["claimed_ids"])
+    if uid not in claimed:
+        claimed.append(uid)
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE giveaways SET confirmed_ids=?, claimed_ids=? WHERE id=?",
+            (json.dumps(confirmed), json.dumps(claimed), giveaway_id),
+        )
+    return "ok"
 
 
 def get_giveaway_history(chat_id: int, limit: int = 10) -> list[dict]:
@@ -1880,14 +2012,10 @@ def get_giveaway_history(chat_id: int, limit: int = 10) -> list[dict]:
         ).fetchall()
     result = []
     for row in rows:
-        try:
-            winner_ids = json.loads(row["winner_ids"])
-        except (json.JSONDecodeError, TypeError):
-            winner_ids = []
         result.append({
             "giveaway_id": str(row["giveaway_id"]),
             "prize": str(row["prize"]),
-            "winner_ids": winner_ids if isinstance(winner_ids, list) else [],
+            "winner_ids": _parse_id_list(row["winner_ids"]),
             "participant_count": int(row["participant_count"]),
             "drawn_at": float(row["drawn_at"]),
             "reroll_count": int(row["reroll_count"]),

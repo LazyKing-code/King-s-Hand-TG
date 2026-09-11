@@ -169,10 +169,12 @@ Admins can run giveaways with `/giveaway <duration> <winners> <prize>`:
   - `req:10` — minimum 10 messages needed
   - `age:7` — account age 7+ days (optional)
 - Members click "Enter Giveaway" button to participate
-- Winners are auto-announced when time expires
+- Winners are auto-announced when time expires with a claim board
+- Winners tap **Claim Prize** to prove they're active; admins **Confirm** after handing over the prize
+- Admins can **Reroll unclaimed** from the board (confirmed winners are kept)
 - `/gcancel` (reply to giveaway message) to cancel
-- `/greroll` (reply to giveaway message) to pick new winners
-- `/ghistory` shows last 10 giveaways with participant counts and reroll history
+- `/greroll` (reply to giveaway/winner message, or use the id from `/ghistory`)
+- `/ghistory` shows last 10 giveaways with ids, winners, and claim status
 - Multiple giveaways can run in parallel with different timings
 - Real-time instant capture and announcements
 

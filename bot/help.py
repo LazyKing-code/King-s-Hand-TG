@@ -140,8 +140,9 @@ def _pages() -> dict[str, str]:
             f"<blockquote>{cmd('giveaway')} 1h 2 Discord Nitro\n"
             f"{cmd('giveaway')} 10m 1 iPad req:10 age:7</blockquote>\n"
             f"<b>{cmd('gcancel')}</b> — cancel (reply to giveaway msg)\n"
-            f"<b>{cmd('ghistory')}</b> — last 10 giveaways\n"
-            f"<b>{cmd('greroll')}</b> — reroll winners (reply to giveaway msg or use giveaway_id)\n\n"
+            f"<b>{cmd('ghistory')}</b> — last 10 giveaways + ids\n"
+            f"<b>{cmd('greroll')}</b> — reroll unclaimed winners (reply, id, or button)\n"
+            "After a draw: winners tap Claim, admins Confirm or Reroll.\n\n"
             f"Not for admins: {cmd('unreport')}, {cmd('unreportall')}, {cmd('tagall')}, "
             f"{cmd('approve')}, {cmd('trust')}, {cmd('makeadmin')}, raid tools — owner only."
         ),

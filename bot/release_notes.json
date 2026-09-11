@@ -262,5 +262,49 @@
         "/strikes was wrongly labeling Telegram admins and mods as 'member'. A missing database helper crashed while reading their role, and the error was swallowed so their admin permissions never showed either. That is fixed - real admins/mods now show the correct role (helper/mod/admin when detectable) plus their actual permission checkmarks."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.13",
+    "date": "11 September 2026",
+    "headline": "Giveaway end-message fix",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Ended Giveaways",
+        "When a giveaway finished, the bot was marking it ended in the database but crashing before it could update the group message - so it still looked active with an Enter button, and tapping Enter said it already ended. That crash is fixed. Ended giveaways now edit the original post to show winners and remove the Enter button. If an old stuck message is still showing Enter, tapping it once will refresh it to the ended state."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.14",
+    "date": "11 September 2026",
+    "headline": "Fixed /ask and richer /ghistory",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "/ask Search Fix",
+        "/ask was failing with 'Something went wrong while searching' because the DuckDuckGo helper it used no longer exists, so the web fallback crashed after Wikipedia. It now tries Wikipedia, then DuckDuckGo Instant Answer, then text search, and fails softly if a source is blocked instead of dying."
+      ],
+      [
+        "Giveaway History",
+        "/ghistory now lists the actual winner names for each past giveaway, not just the prize and counts."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.15",
+    "date": "11 September 2026",
+    "headline": "Giveaway claim + reroll fix",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Claim and Confirm",
+        "When a giveaway ends, winners get a claim board. Winners tap Claim Prize to prove they are active. Admins tap Confirm after handing over the prize, or Reroll unclaimed if someone stays silent. Confirmed winners are kept on a reroll."
+      ],
+      [
+        "Reroll Fix",
+        "/greroll now finds the giveaway from either the original post or the winner board, and /ghistory shows each giveaway id so you can reroll by id if needed."
+      ]
+    ]
   }
 ]

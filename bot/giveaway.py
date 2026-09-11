@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import random
 import secrets
@@ -22,7 +21,7 @@ from telegram.ext import ContextTypes
 
 from bot import db
 from bot.commands import cmd
-from bot.moderation import require_group_admin
+from bot.moderation import is_group_admin, require_group_admin
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +46,195 @@ def _ist_str(ts: float) -> str:
         datetime.utcfromtimestamp(ts) + timedelta(hours=5, minutes=30)
     )
     return dt.strftime("%d %b, %I:%M %p")
+
+
+def _mention_user(uid: int) -> str:
+    user_info = db.lookup_seen_id(uid)
+    if user_info and user_info.get("username"):
+        return f"@{escape(str(user_info['username']))}"
+    if user_info and user_info.get("first_name"):
+        return f'<a href="tg://user?id={uid}">{escape(str(user_info["first_name"]))}</a>'
+    return f'<a href="tg://user?id={uid}">User {uid}</a>'
+
+
+def _winner_mentions(winner_ids: list[int]) -> str:
+    return ", ".join(_mention_user(uid) for uid in winner_ids)
+
+
+def _ended_text(prize: str, winner_ids: list[int], *, giveaway_id: str | None = None) -> str:
+    if not winner_ids:
+        text = (
+            f"<b>🎁 GIVEAWAY ENDED</b>\n\n"
+            f"Prize: {escape(prize)}\n\n"
+            "No participants entered. Giveaway cancelled."
+        )
+    else:
+        text = (
+            f"<b>🎉 GIVEAWAY ENDED</b>\n\n"
+            f"Prize: <b>{escape(prize)}</b>\n\n"
+            f"🏆 Winner(s): {_winner_mentions(winner_ids)}\n\n"
+            "Winners: tap <b>Claim Prize</b> on the announcement below.\n"
+            "Admins: confirm after you hand it over, or reroll if they stay inactive."
+        )
+    if giveaway_id:
+        text += f"\n\n<code>id: {escape(giveaway_id)}</code>"
+    return text
+
+
+def _winner_status_line(uid: int, claimed: set[int], confirmed: set[int]) -> str:
+    name = _mention_user(uid)
+    if uid in confirmed:
+        return f"• {name} — 🎉 confirmed (prize given)"
+    if uid in claimed:
+        return f"• {name} — ✅ claimed (waiting admin confirm)"
+    return f"• {name} — ⏳ waiting to claim"
+
+
+def _claim_board_text(giveaway: dict, *, reroll_count: int = 0) -> str:
+    winners = giveaway.get("winner_ids") or []
+    claimed = set(giveaway.get("claimed_ids") or [])
+    confirmed = set(giveaway.get("confirmed_ids") or [])
+    lines = [
+        "<b>🎉 Giveaway Winner(s)</b>",
+        f"Prize: <b>{escape(giveaway['prize'])}</b>",
+        "",
+        "<b>Status:</b>",
+    ]
+    for uid in winners:
+        lines.append(_winner_status_line(uid, claimed, confirmed))
+    lines.append("")
+    if winners and all(uid in confirmed for uid in winners):
+        lines.append("All prizes confirmed. Nice.")
+    else:
+        lines.append("Winners: tap <b>Claim Prize</b> so admins know you're active.")
+        lines.append("Admins: <b>Confirm</b> after giving the prize, or <b>Reroll</b> if they don't claim.")
+    if reroll_count > 0:
+        lines.append(f"\n<i>Rerolled {reroll_count} time(s)</i>")
+    lines.append(f"\n<code>id: {escape(giveaway['id'])}</code>")
+    return "\n".join(lines)
+
+
+def _claim_markup(giveaway: dict) -> InlineKeyboardMarkup:
+    winners = giveaway.get("winner_ids") or []
+    confirmed = set(giveaway.get("confirmed_ids") or [])
+    gid = giveaway["id"]
+    rows: list[list[InlineKeyboardButton]] = []
+
+    if winners and not all(uid in confirmed for uid in winners):
+        rows.append([InlineKeyboardButton("🎁 Claim Prize", callback_data=f"gv:claim:{gid}")])
+        confirm_row: list[InlineKeyboardButton] = []
+        for uid in winners:
+            if uid in confirmed:
+                continue
+            label = f"✅ Confirm {uid}"
+            info = db.lookup_seen_id(uid)
+            if info and info.get("first_name"):
+                short = str(info["first_name"])[:12]
+                label = f"✅ {short}"
+            confirm_row.append(
+                InlineKeyboardButton(label, callback_data=f"gv:confirm:{gid}:{uid}")
+            )
+            if len(confirm_row) == 2:
+                rows.append(confirm_row)
+                confirm_row = []
+        if confirm_row:
+            rows.append(confirm_row)
+        rows.append([InlineKeyboardButton("🎲 Reroll unclaimed", callback_data=f"gv:reroll:{gid}")])
+    return InlineKeyboardMarkup(rows)
+
+
+_NO_BUTTONS = InlineKeyboardMarkup([])
+
+
+async def _edit_giveaway_message(bot, chat_id: int, message_id: int | None, text: str, reply_markup=None) -> None:
+    if not message_id:
+        return
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=_NO_BUTTONS if reply_markup is None else reply_markup,
+            disable_web_page_preview=True,
+        )
+    except TelegramError as exc:
+        log.warning("Could not edit giveaway message chat=%s msg=%s: %s", chat_id, message_id, exc)
+
+
+async def _refresh_claim_message(bot, giveaway: dict, *, reroll_count: int = 0) -> None:
+    text = _claim_board_text(giveaway, reroll_count=reroll_count)
+    markup = _claim_markup(giveaway)
+    mid = giveaway.get("claim_message_id")
+    if mid:
+        try:
+            await bot.edit_message_text(
+                chat_id=giveaway["chat_id"],
+                message_id=mid,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+            return
+        except TelegramError as exc:
+            log.warning("Could not refresh claim message: %s", exc)
+    try:
+        sent = await bot.send_message(
+            giveaway["chat_id"],
+            text,
+            parse_mode="HTML",
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+        db.set_claim_message(giveaway["id"], sent.message_id)
+    except TelegramError as exc:
+        log.warning("Could not send claim board: %s", exc)
+
+
+async def _perform_reroll(bot, giveaway: dict) -> tuple[bool, str]:
+    """Reroll unclaimed/unconfirmed winners. Returns (ok, html_or_error)."""
+    participants = [int(x) for x in (giveaway.get("participants") or [])]
+    winners = [int(x) for x in (giveaway.get("winner_ids") or [])]
+    confirmed = set(giveaway.get("confirmed_ids") or [])
+    keep = [uid for uid in winners if uid in confirmed]
+    need = max(0, giveaway["winner_count"] - len(keep))
+    if need == 0:
+        return False, "All winners are already confirmed. Nothing left to reroll."
+    pool = [uid for uid in participants if uid not in keep and uid not in winners]
+    # Also allow previously drawn winners who never claimed to be excluded; if pool too small, include unclaimed old winners' peers only
+    if len(pool) < need:
+        pool = [uid for uid in participants if uid not in keep]
+    if need > 0 and len(pool) < need:
+        return False, "Not enough other participants left to reroll."
+    new_extra = random.sample(pool, need) if need else []
+    new_winners = keep + new_extra
+    if set(new_winners) == set(winners) and need > 0:
+        # Force a different set when possible
+        alt_pool = [uid for uid in participants if uid not in keep]
+        if len(alt_pool) >= need:
+            random.shuffle(alt_pool)
+            new_extra = alt_pool[:need]
+            new_winners = keep + new_extra
+    reroll_count = db.reroll_giveaway_winners(giveaway["id"], new_winners)
+    if not reroll_count:
+        return False, "Could not reroll that giveaway."
+    fresh = db.load_giveaway(giveaway["id"])
+    if not fresh:
+        return False, "Giveaway disappeared after reroll."
+    await _edit_giveaway_message(
+        bot,
+        fresh["chat_id"],
+        fresh.get("message_id"),
+        _ended_text(fresh["prize"], fresh["winner_ids"], giveaway_id=fresh["id"]),
+    )
+    await _refresh_claim_message(bot, fresh, reroll_count=reroll_count)
+    return True, (
+        f"🎲 <b>Giveaway Rerolled!</b>\n\n"
+        f"Prize: <b>{escape(fresh['prize'])}</b>\n"
+        f"🏆 New Winner(s): {_winner_mentions(fresh['winner_ids'])}\n\n"
+        f"Reroll #{reroll_count}. Winners must claim again."
+    )
 
 
 def _parse_duration(text: str) -> int | None:
@@ -204,63 +392,74 @@ def _giveaway_text(
 
 
 async def on_giveaway_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle Enter button clicks."""
+    """Handle Enter / Claim / Confirm / Reroll button clicks."""
     query = update.callback_query
     if not query or not query.data:
         return
-    
+
     parts = query.data.split(":")
-    if len(parts) != 3 or parts[0] != "gv" or parts[1] != "enter":
+    if len(parts) < 3 or parts[0] != "gv":
         await query.answer()
         return
-    
+
+    action = parts[1]
     giveaway_id = parts[2]
     user = update.effective_user
-    
     if not user:
         await query.answer("Something went wrong.", show_alert=True)
         return
-    
+
+    if action == "enter":
+        await _handle_enter(query, context, giveaway_id, user)
+        return
+    if action == "claim":
+        await _handle_claim(query, context, giveaway_id, user)
+        return
+    if action == "confirm" and len(parts) >= 4:
+        await _handle_confirm(update, query, context, giveaway_id, user, parts[3])
+        return
+    if action == "reroll":
+        await _handle_reroll_button(update, query, context, giveaway_id, user)
+        return
+    await query.answer()
+
+
+async def _handle_enter(query, context, giveaway_id: str, user) -> None:
     async with _lock_for(giveaway_id):
         giveaway = db.load_giveaway(giveaway_id)
-        
+
         if not giveaway:
             await query.answer("This giveaway no longer exists.", show_alert=True)
             return
-        
+
         if giveaway["status"] != "active":
             await query.answer("This giveaway has ended.", show_alert=True)
+            winners = giveaway.get("winner_ids") or []
+            await _edit_giveaway_message(
+                context.bot,
+                giveaway["chat_id"],
+                giveaway.get("message_id") or (query.message.message_id if query.message else None),
+                _ended_text(giveaway["prize"], winners, giveaway_id=giveaway_id),
+            )
             return
-        
-        # Check requirements
+
         chat_id = giveaway["chat_id"]
-        
-        # Check message requirement
         if giveaway["min_messages"] > 0:
             activity = db.get_user_activity(chat_id, user.id)
-            total = activity.get("monthly", 0)  # Use monthly as cumulative
+            total = activity.get("monthly", 0)
             if total < giveaway["min_messages"]:
                 await query.answer(
                     f"You need at least {giveaway['min_messages']} messages to enter. You have {total}.",
                     show_alert=True,
                 )
                 return
-        
-        # Check account age
-        if giveaway["min_account_age_days"] > 0:
-            # Telegram user IDs are roughly sequential, lower = older account
-            # This is a rough heuristic since we can't get exact account creation date
-            # For now, we'll skip this check or implement it later with seen_users timestamp
-            pass
-        
-        # Add participant
+
         added = db.add_giveaway_participant(giveaway_id, user.id)
         if not added:
             await query.answer("You're already entered!", show_alert=True)
             return
-        
-        # Update message
-        giveaway = db.load_giveaway(giveaway_id)  # Reload to get updated participant list
+
+        giveaway = db.load_giveaway(giveaway_id)
         text = _giveaway_text(
             giveaway["prize"],
             giveaway["end_time"],
@@ -272,15 +471,88 @@ async def on_giveaway_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("🎉 Enter Giveaway", callback_data=f"gv:enter:{giveaway_id}")
         ]])
-        
         try:
             await query.edit_message_text(
                 text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True
             )
         except TelegramError:
             pass
-        
         await query.answer("You're in! Good luck! 🍀", show_alert=False)
+
+
+async def _handle_claim(query, context, giveaway_id: str, user) -> None:
+    async with _lock_for(giveaway_id):
+        result = db.claim_giveaway(giveaway_id, user.id)
+        if result == "missing":
+            await query.answer("Giveaway not found.", show_alert=True)
+            return
+        if result == "bad_status":
+            await query.answer("This giveaway is not awaiting claims.", show_alert=True)
+            return
+        if result == "not_winner":
+            await query.answer("Only winners can claim.", show_alert=True)
+            return
+        if result == "already":
+            await query.answer("You already claimed (or were confirmed).", show_alert=True)
+            return
+        fresh = db.load_giveaway(giveaway_id)
+        if fresh:
+            await _refresh_claim_message(context.bot, fresh)
+        await query.answer("Claimed! An admin can confirm once they give you the prize.", show_alert=True)
+
+
+async def _handle_confirm(update: Update, query, context, giveaway_id: str, user, target_raw: str) -> None:
+    if not await is_group_admin(update, user.id):
+        await query.answer("Only admins can confirm winners.", show_alert=True)
+        return
+    try:
+        target_id = int(target_raw)
+    except ValueError:
+        await query.answer("Bad winner id.", show_alert=True)
+        return
+    async with _lock_for(giveaway_id):
+        result = db.confirm_giveaway_winner(giveaway_id, target_id)
+        if result == "missing":
+            await query.answer("Giveaway not found.", show_alert=True)
+            return
+        if result == "bad_status":
+            await query.answer("This giveaway is not awaiting confirms.", show_alert=True)
+            return
+        if result == "not_winner":
+            await query.answer("That user is not a winner.", show_alert=True)
+            return
+        if result == "already":
+            await query.answer("Already confirmed.", show_alert=True)
+            return
+        fresh = db.load_giveaway(giveaway_id)
+        if fresh:
+            await _refresh_claim_message(context.bot, fresh)
+        await query.answer("Confirmed. Prize marked as given.", show_alert=True)
+
+
+async def _handle_reroll_button(update: Update, query, context, giveaway_id: str, user) -> None:
+    if not await is_group_admin(update, user.id):
+        await query.answer("Only admins can reroll.", show_alert=True)
+        return
+    async with _lock_for(giveaway_id):
+        giveaway = db.load_giveaway(giveaway_id)
+        if not giveaway or giveaway["status"] != "finished":
+            await query.answer("Nothing to reroll.", show_alert=True)
+            return
+        ok, text = await _perform_reroll(context.bot, giveaway)
+        if not ok:
+            await query.answer(text, show_alert=True)
+            return
+        await query.answer("Rerolled.", show_alert=False)
+        try:
+            await context.bot.send_message(
+                giveaway["chat_id"],
+                text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except TelegramError:
+            pass
 
 
 async def cmd_gcancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -295,31 +567,21 @@ async def cmd_gcancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.reply_text(f"Reply to a giveaway message with {cmd('gcancel')} to cancel it.")
         return
     
-    # Find giveaway by message_id
-    giveaways = db.list_active_giveaways(update.effective_chat.id)
-    target = None
-    for g in giveaways:
-        if g.get("message_id") == reply.message_id:
-            target = g
-            break
-    
-    if not target:
+    target = db.find_giveaway_by_message(update.effective_chat.id, reply.message_id)
+    if not target or target["status"] != "active":
         await msg.reply_text("That's not an active giveaway message.")
         return
     
     db.cancel_giveaway(target["id"])
     
-    try:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id,
-            message_id=reply.message_id,
-            text=f"<b>🎁 GIVEAWAY CANCELLED</b>\n\nPrize: <s>{escape(target['prize'])}</s>\n\nThis giveaway has been cancelled by an admin.",
-            parse_mode="HTML",
-        )
-    except TelegramError:
-        pass
-    
-    await msg.reply_text("✅ Giveaway cancelled.")
+    await _edit_giveaway_message(
+        context.bot,
+        update.effective_chat.id,
+        reply.message_id,
+        f"<b>🎁 GIVEAWAY CANCELLED</b>\n\nPrize: <s>{escape(target['prize'])}</s>\n\nThis giveaway has been cancelled by an admin.",
+    )
+    await msg.reply_text("Giveaway cancelled.")
+    _forget_lock(target["id"])
 
 
 async def cmd_ghistory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -341,11 +603,28 @@ async def cmd_ghistory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     for entry in history:
         when = _ist_str(entry["drawn_at"])
         prize = escape(entry["prize"])
-        winner_count = len(entry["winner_ids"])
+        winners = entry.get("winner_ids") or []
+        winner_count = len(winners)
         rerolls = entry["reroll_count"]
+        gid = escape(entry["giveaway_id"])
         
         lines.append(f"• <b>{prize}</b> ({when})")
+        lines.append(f"  <code>id: {gid}</code>")
         lines.append(f"  {winner_count} winner(s), {entry['participant_count']} participants")
+        if winners:
+            lines.append(f"  🏆 {_winner_mentions(winners)}")
+        live = db.load_giveaway(entry["giveaway_id"])
+        if live and live.get("winner_ids"):
+            claimed = set(live.get("claimed_ids") or [])
+            confirmed = set(live.get("confirmed_ids") or [])
+            pending = [u for u in live["winner_ids"] if u not in confirmed]
+            if not pending:
+                lines.append("  Status: all confirmed")
+            else:
+                lines.append(
+                    f"  Status: {len(claimed)} claimed, {len(confirmed)} confirmed, "
+                    f"{len(pending)} still open"
+                )
         if rerolls > 0:
             lines.append(f"  Rerolled {rerolls} time(s)")
         lines.append("")
@@ -354,7 +633,7 @@ async def cmd_ghistory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def cmd_greroll(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Reroll giveaway winners. Usage: /greroll (reply to giveaway message) or /greroll <giveaway_id>"""
+    """Reroll giveaway winners. Usage: /greroll (reply) or /greroll <giveaway_id>"""
     if not await require_group_admin(update):
         return
     
@@ -363,110 +642,49 @@ async def cmd_greroll(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = update.effective_chat.id
     args = context.args or []
     
-    giveaway_id = None
+    giveaway = None
     
-    # Method 1: Reply to giveaway message (easiest)
     if reply:
-        # Find giveaway by message_id
-        giveaways = db.list_active_giveaways(chat_id)
-        for g in giveaways:
-            if g.get("message_id") == reply.message_id and g["status"] == "finished":
-                giveaway_id = g["id"]
-                break
-        
-        # Also check finished giveaways in DB
-        if not giveaway_id:
-            # We need to check all giveaways (not just active)
-            with db.cursor() as conn:
-                row = conn.execute(
-                    "SELECT id, status FROM giveaways WHERE chat_id=? AND message_id=?",
-                    (chat_id, reply.message_id),
-                ).fetchone()
-                if row:
-                    giveaway_id = str(row["id"])
-        
-        if not giveaway_id:
+        giveaway = db.find_giveaway_by_message(chat_id, reply.message_id)
+        if not giveaway:
             await msg.reply_text(
-                "That message is not a giveaway, or the giveaway data was not found.\n"
-                f"You can also use {cmd('greroll')} <giveaway_id> without replying."
+                "That message is not a giveaway (or its winner board).\n"
+                f"Reply to the original giveaway / winner announcement, or use "
+                f"{cmd('greroll')} <giveaway_id> from {cmd('ghistory')}."
             )
             return
-    
-    # Method 2: Provide giveaway_id as argument
     elif args:
-        giveaway_id = args[0]
-    
-    # Neither method provided
+        giveaway = db.load_giveaway(args[0].strip())
+        if not giveaway:
+            await msg.reply_text("Giveaway not found. Check the id in /ghistory.")
+            return
     else:
         await msg.reply_text(
-            f"Usage: {cmd('greroll')} (reply to giveaway message)\n"
+            f"Usage: reply to the giveaway/winner message with {cmd('greroll')}\n"
             f"Or: {cmd('greroll')} <giveaway_id>\n\n"
-            "Find giveaway IDs in the original announcement or via /ghistory."
+            f"Tip: after a draw, use the <b>Reroll unclaimed</b> button on the winner board."
         )
-        return
-    giveaway = db.load_giveaway(giveaway_id)
-    
-    if not giveaway:
-        await msg.reply_text("Giveaway not found. Make sure the ID is correct.")
-        return
-    
-    if giveaway["status"] != "finished":
-        await msg.reply_text("That giveaway hasn't finished yet or was cancelled.")
         return
     
     if giveaway["chat_id"] != chat_id:
         await msg.reply_text("That giveaway is from a different chat.")
         return
     
-    # Get current history entry
-    history_entries = [h for h in history if h["giveaway_id"] == giveaway_id]
-    if not history_entries:
-        await msg.reply_text("Could not find history for that giveaway.")
+    if giveaway["status"] != "finished":
+        await msg.reply_text("That giveaway hasn't finished yet or was cancelled.")
         return
     
-    old_entry = history_entries[0]
-    reroll_count = old_entry["reroll_count"] + 1
+    async with _lock_for(giveaway["id"]):
+        fresh = db.load_giveaway(giveaway["id"])
+        if not fresh or fresh["status"] != "finished":
+            await msg.reply_text("That giveaway hasn't finished yet or was cancelled.")
+            return
+        ok, text = await _perform_reroll(context.bot, fresh)
     
-    # Reroll winners
-    participants = giveaway["participants"]
-    if len(participants) < giveaway["winner_count"]:
-        await msg.reply_text("Not enough participants to reroll.")
+    if not ok:
+        await msg.reply_text(text)
         return
-    
-    # Pick new random winners
-    new_winners = random.sample(participants, giveaway["winner_count"])
-    
-    # Update history with new winners
-    with db.cursor() as conn:
-        conn.execute(
-            """
-            UPDATE giveaway_history
-            SET winner_ids=?, reroll_count=?
-            WHERE giveaway_id=?
-            """,
-            (json.dumps(new_winners), reroll_count, giveaway_id),
-        )
-    
-    # Announce new winners
-    winner_mentions = []
-    for uid in new_winners:
-        user_info = db.get_seen_user(uid)
-        if user_info and user_info.get("username"):
-            winner_mentions.append(f"@{user_info['username']}")
-        elif user_info and user_info.get("first_name"):
-            winner_mentions.append(f'<a href="tg://user?id={uid}">{escape(user_info["first_name"])}</a>')
-        else:
-            winner_mentions.append(f'<a href="tg://user?id={uid}">User {uid}</a>')
-    
-    winner_text = ", ".join(winner_mentions)
-    
-    await msg.reply_html(
-        f"🎲 <b>Giveaway Rerolled!</b>\n\n"
-        f"Prize: <b>{escape(giveaway['prize'])}</b>\n"
-        f"🏆 New Winner(s): {winner_text}\n\n"
-        f"Reroll #{reroll_count}. Congratulations!",
-        disable_web_page_preview=True,
-    )
+    await msg.reply_html(text, disable_web_page_preview=True)
 
 
 # ---------------------------------------------------------------------------
@@ -489,69 +707,57 @@ async def draw_giveaway_winners_once(application) -> int:
             if not fresh or fresh["status"] != "active":
                 continue
             
-            # Draw winners
-            participants = fresh["participants"]
-            if not participants:
-                # No participants - cancel
-                db.cancel_giveaway(fresh["id"])
-                try:
-                    await application.bot.edit_message_text(
-                        chat_id=fresh["chat_id"],
-                        message_id=fresh["message_id"],
-                        text=f"<b>🎁 GIVEAWAY ENDED</b>\n\nPrize: {escape(fresh['prize'])}\n\nNo participants entered. Giveaway cancelled.",
-                        parse_mode="HTML",
+            participants = list(fresh["participants"] or [])
+            winners: list[int] = []
+            
+            try:
+                if not participants:
+                    db.cancel_giveaway(fresh["id"])
+                    await _edit_giveaway_message(
+                        application.bot,
+                        fresh["chat_id"],
+                        fresh.get("message_id"),
+                        _ended_text(fresh["prize"], []),
                     )
-                except TelegramError:
-                    pass
-                _forget_lock(fresh["id"])
+                    drawn += 1
+                    continue
+                
+                winner_count = min(fresh["winner_count"], len(participants))
+                winners = random.sample(participants, winner_count)
+                db.finish_giveaway(fresh["id"], winners)
+                finished = db.load_giveaway(fresh["id"]) or fresh
+                
+                await _edit_giveaway_message(
+                    application.bot,
+                    finished["chat_id"],
+                    finished.get("message_id"),
+                    _ended_text(finished["prize"], winners, giveaway_id=finished["id"]),
+                )
+                await _refresh_claim_message(application.bot, finished)
+                
                 drawn += 1
-                continue
-            
-            # Pick random winners
-            winner_count = min(fresh["winner_count"], len(participants))
-            winners = random.sample(participants, winner_count)
-            
-            # Save to history
-            db.finish_giveaway(fresh["id"], winners)
-            _forget_lock(fresh["id"])
-            
-            # Announce winners
-            winner_mentions = []
-            for uid in winners:
-                user_info = db.get_seen_user(uid)
-                if user_info and user_info.get("username"):
-                    winner_mentions.append(f"@{user_info['username']}")
-                elif user_info and user_info.get("first_name"):
-                    winner_mentions.append(f'<a href="tg://user?id={uid}">{escape(user_info["first_name"])}</a>')
-                else:
-                    winner_mentions.append(f'<a href="tg://user?id={uid}">User {uid}</a>')
-            
-            winner_text = ", ".join(winner_mentions)
-            
-            # Update giveaway message
-            try:
-                await application.bot.edit_message_text(
-                    chat_id=fresh["chat_id"],
-                    message_id=fresh["message_id"],
-                    text=f"<b>🎉 GIVEAWAY ENDED</b>\n\nPrize: <b>{escape(fresh['prize'])}</b>\n\n🏆 Winner(s): {winner_text}\n\nCongratulations!",
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            except TelegramError as exc:
-                log.warning("Could not edit giveaway message %s: %s", fresh["id"], exc)
-            
-            # Also send announcement in chat
-            try:
-                await application.bot.send_message(
-                    fresh["chat_id"],
-                    f"🎉 <b>Giveaway Winner(s) Announced!</b>\n\nPrize: <b>{escape(fresh['prize'])}</b>\n🏆 {winner_text}\n\nCongratulations! Contact the admin to claim your prize.",
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            except TelegramError as exc:
-                log.warning("Could not send giveaway announcement in chat %s: %s", fresh["chat_id"], exc)
-            
-            drawn += 1
+            except Exception:
+                log.exception("Failed drawing giveaway %s", fresh["id"])
+                # If we already finished it in DB, still try to refresh the UI
+                current = db.load_giveaway(fresh["id"])
+                if current and current["status"] in {"finished", "cancelled"}:
+                    await _edit_giveaway_message(
+                        application.bot,
+                        current["chat_id"],
+                        current.get("message_id"),
+                        _ended_text(
+                            current["prize"],
+                            current.get("winner_ids") or winners,
+                            giveaway_id=current["id"],
+                        ),
+                    )
+                    if current["status"] == "finished" and (current.get("winner_ids") or winners):
+                        if not current.get("winner_ids") and winners:
+                            # ensure winners persisted for claim UI
+                            pass
+                        await _refresh_claim_message(application.bot, current)
+            finally:
+                _forget_lock(fresh["id"])
     
     return drawn
 

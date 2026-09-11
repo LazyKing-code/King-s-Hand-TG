@@ -89,73 +89,151 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Ask me anything!\nExample: {cmd('ask')} what is the speed of light"
         )
         return
-    
-    question = " ".join(context.args)
-    status_msg = await msg.reply_text("Searching...")
-    
-    # Try Wikipedia first (fast, clean, accurate for established facts)
+
+    question = " ".join(context.args).strip()
+    try:
+        status_msg = await msg.reply_text("Searching...")
+    except Exception:
+        log.exception("ask: could not send status")
+        return
+
+    try:
+        answer = await _answer_from_wikipedia(question)
+        if not answer:
+            await status_msg.edit_text("Searching the web...")
+            answer = await _answer_from_ddg_instant(question)
+        if not answer:
+            answer = await _answer_from_web(question)
+        if answer:
+            await status_msg.edit_text(answer)
+        else:
+            await status_msg.edit_text(
+                "I couldn't find a good answer. Try rephrasing your question."
+            )
+    except Exception:
+        log.exception("ask failed")
+        try:
+            await status_msg.edit_text(
+                "Something went wrong while searching. Try again?"
+            )
+        except Exception:
+            pass
+
+
+def _shorten(text: str, max_sentences: int = 2) -> str:
+    text = " ".join((text or "").split())
+    if not text:
+        return ""
+    parts = [
+        p.strip()
+        for p in text.replace("? ", "?|").replace("! ", "!|").replace(". ", ".|").split("|")
+        if p.strip()
+    ]
+    if not parts:
+        return text[:400]
+    out = " ".join(parts[:max_sentences])
+    if out[-1] not in ".!?":
+        out += "."
+    return out
+
+
+async def _answer_from_wikipedia(question: str) -> str | None:
     try:
         import wikipedia
+        from wikipedia.exceptions import DisambiguationError, PageError
+    except ImportError:
+        log.warning("wikipedia package not installed")
+        return None
+
+    try:
         wikipedia.set_lang("en")
-        results = wikipedia.search(question, results=1)
-        
-        if results:
-            summary = wikipedia.summary(results[0], sentences=2, auto_suggest=False)
-            await status_msg.edit_text(summary)
-            return
-            
-    except wikipedia.exceptions.DisambiguationError as e:
-        # Multiple possible topics - pick the first one
+        results = wikipedia.search(question, results=3)
+        if not results:
+            return None
+
+        title = results[0]
         try:
-            summary = wikipedia.summary(e.options[0], sentences=2, auto_suggest=False)
-            await status_msg.edit_text(summary)
-            return
-        except Exception:
-            pass  # Fall through to web search
-    except wikipedia.exceptions.PageError:
-        pass  # Fall through to web search
+            summary = wikipedia.summary(title, sentences=2, auto_suggest=False)
+        except DisambiguationError as exc:
+            options = [o for o in (exc.options or []) if o]
+            if not options:
+                return None
+            summary = wikipedia.summary(options[0], sentences=2, auto_suggest=False)
+        except PageError:
+            if len(results) < 2:
+                return None
+            summary = wikipedia.summary(results[1], sentences=2, auto_suggest=False)
+
+        summary = _shorten(summary, 2)
+        return summary or None
     except Exception as exc:
         log.warning("Wikipedia search failed: %s", exc)
-    
-    # Wikipedia failed - fall back to web search (covers recent/obscure topics)
+        return None
+
+
+async def _answer_from_ddg_instant(question: str) -> str | None:
+    """DuckDuckGo Instant Answer JSON API (no scraping; good for facts)."""
     try:
-        await status_msg.edit_text("Searching the web...")
-        
-        from duckduckgo_search import DDGS
-        
-        # Get instant answer or text results
-        with DDGS() as ddgs:
-            # Try instant answer first (direct facts)
-            try:
-                answer_result = ddgs.answers(question)
-                if answer_result:
-                    answer = answer_result[0].get("text", "")
-                    if answer:
-                        await status_msg.edit_text(answer)
-                        return
-            except Exception:
-                pass
-            
-            # Fall back to text search results
-            results = list(ddgs.text(question, max_results=1))
-            if results:
-                body = results[0].get("body", "")
-                if body:
-                    # Limit to 2-3 sentences
-                    sentences = body.split(". ")
-                    short_answer = ". ".join(sentences[:2])
-                    if not short_answer.endswith("."):
-                        short_answer += "."
-                    await status_msg.edit_text(short_answer)
-                    return
-        
-        # If we got here, nothing useful was found
-        await status_msg.edit_text(
-            "I couldn't find a good answer. Try rephrasing your question."
+        import json
+        import urllib.parse
+        import urllib.request
+
+        params = urllib.parse.urlencode(
+            {
+                "q": question,
+                "format": "json",
+                "no_html": 1,
+                "skip_disambig": 1,
+            }
         )
-        
+        url = f"https://api.duckduckgo.com/?{params}"
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "KingsHandBot/1.0 (Telegram; /ask)"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+
+        for key in ("AbstractText", "Answer"):
+            text = (data.get(key) or "").strip()
+            if text:
+                return _shorten(text, 2)
+
+        related = data.get("RelatedTopics") or []
+        for item in related:
+            if not isinstance(item, dict):
+                continue
+            text = (item.get("Text") or "").strip()
+            if text:
+                return _shorten(text, 2)
+            for nested in item.get("Topics") or []:
+                if isinstance(nested, dict):
+                    text = (nested.get("Text") or "").strip()
+                    if text:
+                        return _shorten(text, 2)
+        return None
     except Exception as exc:
-        log.exception("Web search failed")
-        await status_msg.edit_text(
-            "Something went wrong while searching. Try again?"
-        )
+        log.warning("DDG instant answer failed: %s", exc)
+        return None
+
+
+async def _answer_from_web(question: str) -> str | None:
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        log.warning("duckduckgo-search package not installed")
+        return None
+
+    try:
+        # Newer duckduckgo-search builds dropped DDGS.answers(); text() is enough.
+        with DDGS() as ddgs:
+            results = list(ddgs.text(question, max_results=3))
+        for item in results:
+            body = (item or {}).get("body") or (item or {}).get("title") or ""
+            short = _shorten(body, 2)
+            if short:
+                return short
+        return None
+    except Exception as exc:
+        log.warning("Web search failed: %s", exc)
+        return None
