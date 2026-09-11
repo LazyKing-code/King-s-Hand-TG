@@ -346,5 +346,17 @@
         "If the other person does not Accept or Decline within 1 minute, the challenge cancels itself automatically."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.19",
+    "date": "11 September 2026",
+    "headline": "/ask returns whatever it finds",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "/ask Results",
+        "/ask no longer gives up and says rephrase when a source is thin. It tries Wikipedia, DuckDuckGo Instant Answer, web snippets, and the Wikipedia API, then posts whatever useful text it got instead of insisting on a perfect answer."
+      ]
+    ]
   }
 ]
