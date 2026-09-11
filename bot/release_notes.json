@@ -358,5 +358,17 @@
         "/ask no longer gives up and says rephrase when a source is thin. It tries Wikipedia, DuckDuckGo Instant Answer, web snippets, and the Wikipedia API, then posts whatever useful text it got instead of insisting on a perfect answer."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.20",
+    "date": "11 September 2026",
+    "headline": "/ask uses India web search only",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "/ask Search",
+        "Wikipedia is removed from /ask. It now uses India-focused web search (DuckDuckGo region in-en) and posts the snippets it finds, so slang and local questions are less likely to get weird encyclopedia matches."
+      ]
+    ]
   }
 ]

@@ -11,8 +11,6 @@ from bot.moderation import mention, require_group, resolve_target
 
 log = logging.getLogger(__name__)
 
-# WebSearch is imported dynamically when needed via CallDynamicTool
-
 # {who} is replaced with a clickable mention.
 SCOLDS = (
     "{who}, sit down. The group has seen this movie, and the acting is not getting better.",
@@ -49,6 +47,9 @@ SCOLDS = (
 
 _bags: dict[int, list[int]] = {}
 
+# Prefer India English results for this group's audience.
+_ASK_REGION = "in-en"
+
 
 def _next_scold(chat_id: int) -> str:
     bag = _bags.get(chat_id)
@@ -82,11 +83,11 @@ async def cmd_scold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Answer questions using Wikipedia / web search — return whatever we find."""
+    """Answer questions via India-focused web search (no Wikipedia)."""
     msg = update.effective_message
     if not context.args:
         await msg.reply_text(
-            f"Ask me anything!\nExample: {cmd('ask')} what is the speed of light"
+            f"Ask me anything!\nExample: {cmd('ask')} who won the world cup"
         )
         return
 
@@ -100,14 +101,12 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         answer = await _gather_answer(question)
         if answer:
-            # Telegram message limit ~4096; keep answers readable
             if len(answer) > 3500:
                 answer = answer[:3490].rstrip() + "…"
             await status_msg.edit_text(answer)
         else:
             await status_msg.edit_text(
-                "Search came back empty for that. Try a shorter question, "
-                "or add a year/name (e.g. iPhone 15 release date)."
+                "Search came back empty. Try again in a bit, or make the question a bit clearer."
             )
     except Exception:
         log.exception("ask failed")
@@ -120,15 +119,9 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _gather_answer(question: str) -> str | None:
-    """Try several sources; return the first usable text, preferring fuller answers."""
+    """Web search only (India region). Return whatever useful text we get."""
     candidates: list[str] = []
-
-    for getter in (
-        _answer_from_wikipedia,
-        _answer_from_ddg_instant,
-        _answer_from_web,
-        _answer_from_wiki_api,
-    ):
+    for getter in (_answer_from_web, _answer_from_ddg_instant):
         try:
             hit = await getter(question)
         except Exception as exc:
@@ -136,10 +129,8 @@ async def _gather_answer(question: str) -> str | None:
             hit = None
         if hit:
             candidates.append(hit)
-            # Prefer a solid paragraph; otherwise keep collecting
-            if len(hit) >= 80:
+            if len(hit) >= 60:
                 return hit
-
     return max(candidates, key=len) if candidates else None
 
 
@@ -169,123 +160,8 @@ def _shorten(text: str, max_sentences: int = 3) -> str:
     return out
 
 
-async def _answer_from_wikipedia(question: str) -> str | None:
-    try:
-        import wikipedia
-        from wikipedia.exceptions import DisambiguationError, PageError
-    except ImportError:
-        log.warning("wikipedia package not installed")
-        return None
-
-    try:
-        wikipedia.set_lang("en")
-        try:
-            wikipedia.set_user_agent("KingsHandBot/1.0 (Telegram /ask; contact via bot)")
-        except Exception:
-            pass
-
-        results = wikipedia.search(question, results=5)
-        if not results:
-            return None
-
-        last_err: Exception | None = None
-        for title in results:
-            try:
-                summary = wikipedia.summary(title, sentences=3, auto_suggest=False)
-            except DisambiguationError as exc:
-                options = [o for o in (exc.options or []) if o][:3]
-                for opt in options:
-                    try:
-                        summary = wikipedia.summary(opt, sentences=3, auto_suggest=False)
-                        break
-                    except Exception as inner:
-                        last_err = inner
-                        summary = None
-                else:
-                    continue
-            except PageError as exc:
-                last_err = exc
-                continue
-            except Exception as exc:
-                last_err = exc
-                continue
-
-            summary = _shorten(summary or "", 3)
-            if summary:
-                # Include title when it helps (e.g. iPhone vs iPhone 15)
-                if title.lower() not in summary.lower()[:80]:
-                    return f"{title}: {summary}"
-                return summary
-
-        if last_err:
-            log.warning("Wikipedia search failed: %s", last_err)
-        return None
-    except Exception as exc:
-        log.warning("Wikipedia search failed: %s", exc)
-        return None
-
-
-async def _answer_from_wiki_api(question: str) -> str | None:
-    """MediaWiki opensearch + extract — works even when the wikipedia package is flaky."""
-    try:
-        import json
-        import urllib.parse
-        import urllib.request
-
-        headers = {"User-Agent": "KingsHandBot/1.0 (Telegram /ask)"}
-
-        def _get(url: str) -> dict | list:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                return json.loads(resp.read().decode("utf-8", errors="replace"))
-
-        search_url = (
-            "https://en.wikipedia.org/w/api.php?"
-            + urllib.parse.urlencode(
-                {
-                    "action": "opensearch",
-                    "search": question,
-                    "limit": 3,
-                    "namespace": 0,
-                    "format": "json",
-                }
-            )
-        )
-        data = _get(search_url)
-        titles = data[1] if isinstance(data, list) and len(data) > 1 else []
-        if not titles:
-            return None
-
-        title = titles[0]
-        extract_url = (
-            "https://en.wikipedia.org/w/api.php?"
-            + urllib.parse.urlencode(
-                {
-                    "action": "query",
-                    "prop": "extracts",
-                    "exintro": 1,
-                    "explaintext": 1,
-                    "titles": title,
-                    "format": "json",
-                }
-            )
-        )
-        payload = _get(extract_url)
-        pages = (payload.get("query") or {}).get("pages") or {}
-        for page in pages.values():
-            extract = (page.get("extract") or "").strip()
-            if extract:
-                short = _shorten(extract, 3)
-                if short:
-                    return f"{title}: {short}" if title.lower() not in short.lower()[:80] else short
-        return None
-    except Exception as exc:
-        log.warning("Wikipedia API failed: %s", exc)
-        return None
-
-
 async def _answer_from_ddg_instant(question: str) -> str | None:
-    """DuckDuckGo Instant Answer JSON API (no scraping; good for facts)."""
+    """DuckDuckGo Instant Answer with India locale."""
     try:
         import json
         import urllib.parse
@@ -297,6 +173,7 @@ async def _answer_from_ddg_instant(question: str) -> str | None:
                 "format": "json",
                 "no_html": 1,
                 "skip_disambig": 1,
+                "kl": _ASK_REGION,
             }
         )
         url = f"https://api.duckduckgo.com/?{params}"
@@ -314,8 +191,7 @@ async def _answer_from_ddg_instant(question: str) -> str | None:
             if text:
                 bits.append(text)
         if not bits:
-            related = data.get("RelatedTopics") or []
-            for item in related:
+            for item in data.get("RelatedTopics") or []:
                 if not isinstance(item, dict):
                     continue
                 text = (item.get("Text") or "").strip()
@@ -341,7 +217,7 @@ async def _answer_from_ddg_instant(question: str) -> str | None:
 
 
 async def _answer_from_web(question: str) -> str | None:
-    """DuckDuckGo text/news search — return whatever snippets we get."""
+    """India-region DuckDuckGo text/news search — return whatever snippets we get."""
     try:
         from duckduckgo_search import DDGS
     except ImportError:
@@ -351,23 +227,30 @@ async def _answer_from_web(question: str) -> str | None:
     snippets: list[str] = []
     try:
         with DDGS() as ddgs:
-            # Try a couple of backends; rate-limits are common on hosts.
-            for backend in (None, "lite", "html"):
+            for backend in ("auto", "lite", "html"):
                 try:
-                    kwargs = {"max_results": 5}
-                    if backend:
-                        kwargs["backend"] = backend
-                    results = list(ddgs.text(question, **kwargs))
+                    results = list(
+                        ddgs.text(
+                            question,
+                            region=_ASK_REGION,
+                            safesearch="moderate",
+                            backend=backend,
+                            max_results=5,
+                        )
+                    )
                 except TypeError:
-                    # Older package without backend= kwarg
-                    results = list(ddgs.text(question, max_results=5))
+                    results = list(
+                        ddgs.text(question, region=_ASK_REGION, max_results=5)
+                    )
                 except Exception as exc:
                     log.warning("DDG text backend %s failed: %s", backend, exc)
                     continue
                 for item in results or []:
                     title = (item or {}).get("title") or ""
                     body = (item or {}).get("body") or ""
-                    chunk = _clean_text(f"{title}. {body}" if title and body else (body or title))
+                    chunk = _clean_text(
+                        f"{title}. {body}" if title and body else (body or title)
+                    )
                     if chunk and chunk not in snippets:
                         snippets.append(chunk)
                 if snippets:
@@ -375,14 +258,24 @@ async def _answer_from_web(question: str) -> str | None:
 
             if not snippets:
                 try:
-                    news = list(ddgs.news(question, max_results=3))
+                    news = list(
+                        ddgs.news(question, region=_ASK_REGION, max_results=3)
+                    )
+                except TypeError:
+                    try:
+                        news = list(ddgs.news(question, max_results=3))
+                    except Exception as exc:
+                        log.warning("DDG news failed: %s", exc)
+                        news = []
                 except Exception as exc:
                     log.warning("DDG news failed: %s", exc)
                     news = []
                 for item in news or []:
                     title = (item or {}).get("title") or ""
                     body = (item or {}).get("body") or ""
-                    chunk = _clean_text(f"{title}. {body}" if title and body else (body or title))
+                    chunk = _clean_text(
+                        f"{title}. {body}" if title and body else (body or title)
+                    )
                     if chunk:
                         snippets.append(chunk)
     except Exception as exc:
@@ -390,6 +283,4 @@ async def _answer_from_web(question: str) -> str | None:
 
     if not snippets:
         return None
-    # Return top snippets so the user still gets something useful
-    joined = "\n\n".join(_shorten(s, 2) for s in snippets[:3] if s)
-    return joined or None
+    return "\n\n".join(_shorten(s, 2) for s in snippets[:3] if s) or None

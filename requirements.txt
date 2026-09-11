@@ -3,5 +3,4 @@ python-dotenv==1.1.1
 nudenet==3.4.2
 onnxruntime==1.23.2
 Pillow==11.3.0
-wikipedia==1.4.0
 duckduckgo-search==7.0.2
