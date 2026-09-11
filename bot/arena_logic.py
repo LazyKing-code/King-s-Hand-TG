@@ -12,14 +12,17 @@ MAX_PLAYERS = 2
 # ---------------------------------------------------------------------------
 
 
-def cricket_new(a: int, b: int, batter: int) -> dict:
-    """A fresh cricket match. `batter` bats innings 1."""
+def cricket_new(a: int, b: int, batter: int, overs: int = 1) -> dict:
+    """A fresh cricket match. `batter` bats innings 1. `overs` = 1, 2, or 3."""
+    overs = max(1, min(3, overs))  # Clamp between 1 and 3
     return {
         "a": a,
         "b": b,
         "batter": batter,
         "innings": 1,
         "balls": 0,
+        "overs": overs,
+        "max_balls": overs * 6,
         "score_a": 0,
         "score_b": 0,
         "first_innings": None,
@@ -68,6 +71,7 @@ def cricket_apply_ball(ch: dict) -> str:
     covers "out for 0" correctly (target becomes 1) with no special case.
     The chase ends the instant the target is passed, mid-over if needed.
     """
+    max_balls = int(ch.get("max_balls") or 6)
     picks = _picks(ch)
     pa, pb = int(picks[str(ch["a"])]), int(picks[str(ch["b"])])
     ch["picks"] = {}
@@ -77,7 +81,7 @@ def cricket_apply_ball(ch: dict) -> str:
     out = bat_n == bowl_n
     played = int(ch.get("balls") or 0) + 1
     if out:
-        ch["balls"] = 6
+        ch["balls"] = max_balls
         ch["last"] = f"OUT — both picked {bat_n}"
     else:
         key = "score_a" if batter == ch["a"] else "score_b"
@@ -92,7 +96,7 @@ def cricket_apply_ball(ch: dict) -> str:
         ch["waiting"] = "Chase complete."
         return "finished"
 
-    over = out or int(ch.get("balls") or 0) >= 6
+    over = out or int(ch.get("balls") or 0) >= max_balls
     if over:
         if innings == 1:
             total = int((ch["score_a"] if batter == ch["a"] else ch["score_b"]) or 0)

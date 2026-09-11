@@ -1,4 +1,4 @@
-"""/lb — arena leaderboard and paginated match history."""
+"""/gboard — arena leaderboard and paginated match history."""
 from __future__ import annotations
 
 import logging
@@ -46,7 +46,7 @@ def _board_text(board: list[dict]) -> str:
             f"{i}. {escape(row['name'])} — {row['wins']}W {row['losses']}L {row['draws']}D"
         )
     lines.append("")
-    lines.append(f"Match history: {cmd('lb')} cricket · {cmd('lb')} rps")
+    lines.append(f"Match history: {cmd('gboard')} cricket · {cmd('gboard')} rps")
     return "\n".join(lines)
 
 
@@ -75,10 +75,10 @@ def _history_markup(kind: str, page: int, total_pages: int) -> InlineKeyboardMar
     code = _KIND_CODE[kind]
     row = []
     if page > 0:
-        row.append(InlineKeyboardButton("« Prev", callback_data=f"lb:{code}:{page - 1}"))
-    row.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="lb:noop:0"))
+        row.append(InlineKeyboardButton("« Prev", callback_data=f"gb:{code}:{page - 1}"))
+    row.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="gb:noop:0"))
     if page < total_pages - 1:
-        row.append(InlineKeyboardButton("Next »", callback_data=f"lb:{code}:{page + 1}"))
+        row.append(InlineKeyboardButton("Next »", callback_data=f"gb:{code}:{page + 1}"))
     return InlineKeyboardMarkup([row])
 
 
@@ -91,7 +91,7 @@ def _render_history(chat_id: int, kind: str, page: int) -> tuple[str, InlineKeyb
     return text, markup
 
 
-async def cmd_lb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_gboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_group(update):
         return
     msg = update.effective_message
@@ -106,18 +106,18 @@ async def cmd_lb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     kind = _KIND_ALIASES.get(args[0])
     if not kind:
-        await msg.reply_text(f"Unknown game. Try {cmd('lb')}, {cmd('lb')} cricket, or {cmd('lb')} rps.")
+        await msg.reply_text(f"Unknown game. Try {cmd('gboard')}, {cmd('gboard')} cricket, or {cmd('gboard')} rps.")
         return
     text, markup = _render_history(chat_id, kind, page=0)
     await msg.reply_html(text, reply_markup=markup, disable_web_page_preview=True)
 
 
-async def on_lb_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def on_gboard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
         return
     parts = query.data.split(":")
-    if len(parts) != 3 or parts[0] != "lb":
+    if len(parts) != 3 or parts[0] != "gb":
         await query.answer()
         return
     _, code, raw_page = parts
@@ -142,4 +142,4 @@ async def on_lb_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as exc:
         msg = str(exc).lower()
         if "not modified" not in msg:
-            log.warning("lb pagination edit failed: %s", exc)
+            log.warning("gboard pagination edit failed: %s", exc)

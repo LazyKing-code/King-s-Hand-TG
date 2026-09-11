@@ -162,5 +162,69 @@
         "The daily deleted-account scan now asks for confirmation before kicking instead of auto-kicking. When zombies are found, you'll get a message with /zombies confirm to proceed. If no zombies are found, you'll see a 'no zombies found' message. This gives you more control over account cleanup."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.7",
+    "date": "11 September 2026",
+    "headline": "Giveaway and game improvements",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Giveaway Reroll Enhancement",
+        "/greroll now supports replying to the giveaway message, just like /gcancel. You no longer need to type the giveaway ID manually - simply reply to the finished giveaway message with /greroll to pick new winners."
+      ],
+      [
+        "Game Challenge Error Message",
+        "Improved error message when challenging someone who hasn't been seen by the bot. The message now clearly explains that you should either reply to their message or select their name from Telegram's @ suggestion menu, and that the person needs to have sent at least one message in the chat for the bot to find them."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.8",
+    "date": "11 September 2026",
+    "headline": "Cricket game major improvements",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Over Selection",
+        "Cricket now lets you choose 1, 2, or 3 overs when starting a match (default: 1 over = 6 balls each). Simply challenge someone, and you'll see buttons to select the number of overs before the match starts."
+      ],
+      [
+        "Better UI",
+        "Complete UI overhaul with clean table format, clear scoreboard, and batting/bowling information. The match message now shows who's batting, who's bowling, current ball, scores in a table format, and target information for innings 2."
+      ],
+      [
+        "Opponent Names",
+        "Instead of 'Waiting for the other pick', the bot now shows 'Waiting for [opponent name]...' so you know exactly who needs to pick. When you lock your pick, you'll see '✅ [Your name] locked in' followed by who's waiting."
+      ],
+      [
+        "Spam Protection",
+        "Added 500ms cooldown between button clicks to prevent laggy feeling when players tap too fast. You'll get a '⏳ Slow down! Wait a moment.' message if you click too quickly, making gameplay smoother and preventing accidental double-clicks."
+      ],
+      [
+        "Better Feedback",
+        "Instant feedback with emojis and clear status messages. When you lock a pick, you see '🔒 Locked: [number]'. When a ball is played, you see '⚡ [result]'. When match finishes, you see '✅ Match finished!' with winner announcement."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.9",
+    "date": "11 September 2026",
+    "headline": "Command name changes to avoid conflicts",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Activity Command Renamed",
+        "/top is now /active to avoid conflicts with other bots. Use /active (or /active daily, /active weekly, /active monthly) to see who's most active in the chat. This was causing the /top command to not work when another bot was responding to it first."
+      ],
+      [
+        "Game Leaderboard Command Renamed",
+        "/lb is now /gboard to avoid conflicts with other bots. Use /gboard to see overall game stats, or /gboard cricket and /gboard rps to see match history. The old /lb command was conflicting with other bots' leaderboard commands."
+      ],
+      [
+        "Bug Fix",
+        "Fixed /top command not working - it was calling a non-existent database function. The command now works correctly and has been renamed to /active."
+      ]
+    ]
   }
 ]

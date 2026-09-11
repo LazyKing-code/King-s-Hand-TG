@@ -11,7 +11,7 @@ from bot.commands import cmd
 from bot.moderation import require_group
 
 
-async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show activity leaderboard for daily/weekly/monthly message counts."""
     if not await require_group(update):
         return
@@ -31,7 +31,7 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             period = "monthly"
         else:
             await msg.reply_text(
-                f"Usage: {cmd('top')} [daily|weekly|monthly]\n"
+                f"Usage: {cmd('active')} [daily|weekly|monthly]\n"
                 "Shows who has sent the most messages in the chat."
             )
             return
@@ -54,7 +54,7 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         count = entry["count"]
         
         # Try to get user info from seen_users
-        user_info = db.get_seen_user(user_id)
+        user_info = db.lookup_seen_id(user_id)
         if user_info and user_info.get("username"):
             name = f"@{user_info['username']}"
         elif user_info and user_info.get("first_name"):
@@ -67,7 +67,7 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     lines.append("")
     lines.append(
-        f"See other periods: {cmd('top')} daily · {cmd('top')} weekly · {cmd('top')} monthly"
+        f"See other periods: {cmd('active')} daily · {cmd('active')} weekly · {cmd('active')} monthly"
     )
     
     await msg.reply_html("\n".join(lines), disable_web_page_preview=True)

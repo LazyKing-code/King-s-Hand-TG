@@ -102,10 +102,10 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/scold` | Funny scolding (reply or @username); new line each time |
 | `/ask [question]` | Ask anything - Wikipedia first, then web search for recent topics |
 | `/tag` | Set a member tag; `/tag null` clears it |
-| `/cricket @user` | Hand cricket, one over each. Both pick 1-6 each ball; matching = out |
+| `/cricket @user` | Hand cricket with over selection (1, 2, or 3 overs). Default: 1 over (6 balls each). Matching picks = out |
 | `/rps @user` | One round of rock-paper-scissors |
-| `/lb` | Games leaderboard, last 3 days. `/lb cricket` / `/lb rps` — paginated match history |
-| `/top` | Activity leaderboard (daily/weekly/monthly) - who sends the most messages |
+| `/gboard` | Games leaderboard, last 3 days. `/gboard cricket` / `/gboard rps` — paginated match history |
+| `/active` | Activity leaderboard (daily/weekly/monthly) - who sends the most messages |
 | `/giveaway` | Admin only: start a giveaway (`/giveaway 10m 1 Prize`) |
 | `/gcancel` | Admin only: cancel a giveaway (reply to the message) |
 | `/ghistory` | Admin only: view past giveaways and reroll history |
@@ -126,7 +126,22 @@ During an active flood: `/raidmode 1h` then later `/purgejoins 2h` → `/purgejo
 
 ## Games
 
-`/cricket` and `/rps` are text + button matches, all state kept in the database (no images, no in-memory state to lose on restart). At most 3 matches of each game run at once per group. An unaccepted challenge auto-closes after 3 minutes; a live match with no move for 5 minutes auto-closes with no result recorded. Match history (`/lb cricket` / `/lb rps`) only keeps the last 3 days.
+`/cricket` and `/rps` are text + button matches, all state kept in the database (no images, no in-memory state to lose on restart). 
+
+**Cricket improvements:**
+- **Over selection**: Choose 1, 2, or 3 overs when starting (default: 1 over = 6 balls each)
+- **Better UI**: Clean table format with clear scoreboard and batting/bowling info
+- **Opponent names**: Shows "Waiting for [name]..." instead of "other pick"
+- **Spam protection**: 500ms cooldown between button clicks to prevent lag
+- **Smooth gameplay**: Instant feedback with emojis and clear status messages
+
+At most 3 matches of each game run at once per group. An unaccepted challenge auto-closes after 3 minutes; a live match with no move for 5 minutes auto-closes with no result recorded. Match history (`/gboard cricket` / `/gboard rps`) only keeps the last 3 days.
+
+**Important:** When challenging someone with `/cricket @username`, you must either:
+- Reply to their message, or
+- Type `/cricket @` and select their name from Telegram's suggestion menu (don't just type the username)
+
+If the person has never sent a message in the chat, the bot can't find them. Ask them to send any message first.
 
 ## Activity Tracking
 
@@ -135,7 +150,7 @@ Every group message is counted per user. The bot tracks:
 - **Weekly** (resets after 7 days)
 - **Monthly** (resets after 30 days)
 
-Use `/top` (or `/top daily` / `/top weekly` / `/top monthly`) to see the top 10 chatters. This helps identify the most active members and is used as a requirement condition for giveaways.
+Use `/active` (or `/active daily` / `/active weekly` / `/active monthly`) to see the top 10 chatters. This helps identify the most active members and is used as a requirement condition for giveaways.
 
 ## Giveaways
 

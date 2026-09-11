@@ -22,8 +22,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('notes')}</b> · send <code>#name</code> for a saved note\n"
             f"<b>{cmd('staff')}</b> — reply to ping admins\n"
             f"<b>{cmd('whatsnew')}</b> — latest official update\n"
-            f"<b>{cmd('cricket')}</b> · <b>{cmd('rps')}</b> · <b>{cmd('lb')}</b> — games (tap Games)\n\n"
-            f"<b>{cmd('top')}</b> — activity leaderboard (daily, weekly, monthly)\n\n"
+            f"<b>{cmd('cricket')}</b> · <b>{cmd('rps')}</b> · <b>{cmd('gboard')}</b> — games (tap Games)\n\n"
+            f"<b>{cmd('active')}</b> — activity leaderboard (daily, weekly, monthly)\n\n"
             "<b>Fun</b> — whisper, scold, calculator (tap Fun)\n\n"
             "Mute / ban / lock / raid tools are not listed here. "
             "Admins and owners see extra buttons."
@@ -40,7 +40,7 @@ def _pages() -> dict[str, str]:
             f"<blockquote>{cmd('whisper')} stay after the call</blockquote>\n"
             f"<b>{cmd('scold')}</b> — playful roast. Reply or @username\n"
             f"<b>{cmd('ask')}</b> — ask anything (Wikipedia + web search)\n"
-            f"<b>{cmd('top')}</b> — who has sent the most messages (daily, weekly, monthly)\n"
+            f"<b>{cmd('active')}</b> — who has sent the most messages (daily, weekly, monthly)\n"
             f"<b>{cmd('stats')}</b> — role, immune, trust, approval, warnings "
             "(admins: reply or tag someone)\n"
             f"<b>{cmd('notag')}</b> · <b>{cmd('tagme')}</b> — skip or join group pings\n"
@@ -52,18 +52,20 @@ def _pages() -> dict[str, str]:
         ),
         "games": (
             "<b>Games</b>\n\n"
-            f"<b>{cmd('cricket')}</b> @username — hand cricket, one over each. "
+            f"<b>{cmd('cricket')}</b> @username — hand cricket with over selection. "
+            "Default is 1 over (6 balls each). You can choose 1, 2, or 3 overs. "
             "Both pick 1–6 every ball; matching numbers = out. Highest total wins.\n"
             f"<blockquote>{cmd('cricket')} @username</blockquote>\n"
             f"<b>{cmd('rps')}</b> @username — one round of rock-paper-scissors.\n"
             f"<blockquote>{cmd('rps')} @username</blockquote>\n"
-            f"<b>{cmd('lb')}</b> — leaderboard for the last 3 days\n"
-            f"<b>{cmd('lb')} cricket</b> · <b>{cmd('lb')} rps</b> — match history, "
+            f"<b>{cmd('gboard')}</b> — leaderboard for the last 3 days\n"
+            f"<b>{cmd('gboard')} cricket</b> · <b>{cmd('gboard')} rps</b> — match history, "
             "with times, 5 per page\n\n"
             "<b>Activity</b>\n"
-            f"<b>{cmd('top')}</b> — top 10 chatters today\n"
-            f"<b>{cmd('top')} weekly</b> · <b>{cmd('top')} monthly</b> — "
+            f"<b>{cmd('active')}</b> — top 10 chatters today\n"
+            f"<b>{cmd('active')} weekly</b> · <b>{cmd('active')} monthly</b> — "
             "other periods\n\n"
+            "<b>Note:</b> Cricket now has smoother gameplay with spam protection (500ms cooldown). "
             "At most 3 matches of each game can run at once per group. "
             "A challenge that nobody accepts in 3 minutes, or a match with no "
             "move for 5 minutes, closes on its own."
@@ -290,10 +292,10 @@ _ALIASES = {
     "game": "games",
     "cricket": "games",
     "rps": "games",
-    "lb": "games",
+    "gboard": "games",
     "leaderboard": "games",
     "ask": "fun",
-    "top": "games",
+    "active": "games",
     "activity": "games",
     "giveaway": "admins",
     "gcancel": "admins",

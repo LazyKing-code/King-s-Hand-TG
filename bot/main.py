@@ -29,7 +29,7 @@ from bot.arena import (
     purge_old_results_loop,
     sweep_idle_matches_loop,
 )
-from bot.activity import cmd_top
+from bot.activity import cmd_active
 from bot.giveaway import (
     cmd_gcancel,
     cmd_ghistory,
@@ -43,7 +43,7 @@ from bot.commands import add_cmd, cmd, cmd_name
 from bot.config import BOT_TOKEN
 from bot.flood import cmd_flood, cmd_floodmute, on_flood
 from bot.fun import cmd_ask, cmd_scold
-from bot.leaderboard import cmd_lb, on_lb_callback
+from bot.leaderboard import cmd_gboard, on_gboard_callback
 from bot.handlers import (
     cmd_addowner,
     cmd_allowpack,
@@ -155,9 +155,9 @@ _MEMBER_COMMANDS = [
     ("tagme", "Include me in pings"),
     ("cricket", "Challenge someone to hand cricket"),
     ("rps", "Challenge someone to rock-paper-scissors"),
-    ("lb", "Games leaderboard"),
+    ("gboard", "Games leaderboard"),
     ("ask", "Ask me anything"),
-    ("top", "Activity leaderboard (daily/weekly/monthly)"),
+    ("active", "Activity leaderboard (daily/weekly/monthly)"),
 ]
 _STAFF_COMMANDS = _MEMBER_COMMANDS + [
     ("welcome", "Set the join message"),
@@ -257,7 +257,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_packs_callback, pattern=r"^pk:"))
     app.add_handler(CallbackQueryHandler(on_verify_callback, pattern=r"^vf:"))
     app.add_handler(CallbackQueryHandler(on_arena_callback, pattern=r"^g:"))
-    app.add_handler(CallbackQueryHandler(on_lb_callback, pattern=r"^lb:"))
+    app.add_handler(CallbackQueryHandler(on_gboard_callback, pattern=r"^gb:"))
     app.add_handler(CallbackQueryHandler(on_giveaway_callback, pattern=r"^gv:"))
     add_cmd(app, "whisper", cmd_whisper)
     add_cmd(app, "lock", cmd_lock)
@@ -337,8 +337,8 @@ def main() -> None:
     add_cmd(app, ["unblacklist", "unbl"], cmd_unblacklist)
     add_cmd(app, "cricket", cmd_cricket)
     add_cmd(app, ["rps", "rockpaperscissors"], cmd_rps)
-    add_cmd(app, "lb", cmd_lb)
-    add_cmd(app, "top", cmd_top)
+    add_cmd(app, "gboard", cmd_gboard)
+    add_cmd(app, "active", cmd_active)
     add_cmd(app, "giveaway", cmd_giveaway)
     add_cmd(app, "gcancel", cmd_gcancel)
     add_cmd(app, "ghistory", cmd_ghistory)
