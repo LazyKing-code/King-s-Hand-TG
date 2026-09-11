@@ -133,6 +133,7 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('save')}</b> · <b>{cmd('filter')}</b> · <b>{cmd('blacklist')}</b>\n"
             f"<b>{cmd('report')}</b> · <b>{cmd('packs')}</b> · "
             f"<b>{cmd('strikes')}</b> · <b>{cmd('forgive')}</b>\n"
+            f"<blockquote>{cmd('strikes')} — reply to see warnings, role, and permissions</blockquote>\n"
             f"<b>{cmd('tag')}</b> · <b>{cmd('joins')}</b>\n\n"
             "<b>Giveaways</b>\n"
             f"<b>{cmd('giveaway')}</b> 10m 1 Prize — start a giveaway\n"

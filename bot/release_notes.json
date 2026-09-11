@@ -226,5 +226,17 @@
         "Fixed /top command not working - it was calling a non-existent database function. The command now works correctly and has been renamed to /active."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.10",
+    "date": "11 September 2026",
+    "headline": "Enhanced /strikes command",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Permissions Display",
+        "The /strikes command now shows much more information. When you check someone's strikes, you'll see their role (owner, admin via bot, admin via Telegram, or member), their current status (warnings, approved, trusted, immune), and if they're an admin, a complete permissions breakdown. The permissions are split into two clear sections: '✅ Can Do' shows what they're allowed to do (manage chat, delete messages, kick/ban users, add admins, manage voice chats, invite users, pin messages, change group info), and '❌ Cannot Do' shows what they're restricted from. This makes it crystal clear exactly what someone can and cannot do in your group at a glance."
+      ]
+    ]
   }
 ]

@@ -760,18 +760,112 @@ async def cmd_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not target:
         await update.effective_message.reply_text(f"Who? {TARGET_HINT}")
         return
-    count, kick_on_next = db.get_strikes(update.effective_chat.id, target.id)
-    approved = db.is_approved(update.effective_chat.id, target.id)
-    trusted = is_immune(target.id, update.effective_chat.id)
-    db_trusted = db.is_trusted(update.effective_chat.id, target.id)
-    await update.effective_message.reply_html(
-        f"{mention(target)}\n"
-        f"Warnings: {count}\n"
-        f"Kick on next: {kick_on_next}\n"
-        f"Approved: {approved}\n"
-        f"Trusted: {db_trusted}\n"
-        f"Immune: {trusted}"
-    )
+    
+    chat_id = update.effective_chat.id
+    count, kick_on_next = db.get_strikes(chat_id, target.id)
+    approved = db.is_approved(chat_id, target.id)
+    trusted = is_immune(target.id, chat_id)
+    db_trusted = db.is_trusted(chat_id, target.id)
+    
+    # Get role and permissions
+    role = "member"
+    can_do = []
+    cannot_do = []
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id, target.id)
+        
+        # Determine role
+        if member.status == "creator":
+            role = "👑 owner"
+        elif member.status == "administrator":
+            # Check if promoted by bot
+            bot_role = db.get_admin_role(chat_id, target.id)
+            if bot_role:
+                role = f"🛡️ {bot_role} (via bot)"
+            else:
+                role = "⚔️ admin (Telegram)"
+        
+        # Check all permissions for admins
+        if member.status in ("administrator", "creator"):
+            # Manage chat
+            if member.status == "creator" or getattr(member, "can_manage_chat", False):
+                can_do.append("✅ Manage chat")
+            else:
+                cannot_do.append("❌ Manage chat")
+            
+            # Delete messages
+            if member.status == "creator" or getattr(member, "can_delete_messages", False):
+                can_do.append("✅ Delete messages")
+            else:
+                cannot_do.append("❌ Delete messages")
+            
+            # Kick/ban users
+            if member.status == "creator" or getattr(member, "can_restrict_members", False):
+                can_do.append("✅ Kick/ban users")
+            else:
+                cannot_do.append("❌ Kick/ban users")
+            
+            # Add admins
+            if member.status == "creator" or getattr(member, "can_promote_members", False):
+                can_do.append("✅ Add admins")
+            else:
+                cannot_do.append("❌ Add admins")
+            
+            # Manage voice chats
+            if member.status == "creator" or getattr(member, "can_manage_video_chats", False):
+                can_do.append("✅ Manage voice chats")
+            else:
+                cannot_do.append("❌ Manage voice chats")
+            
+            # Invite users
+            if member.status == "creator" or getattr(member, "can_invite_users", False):
+                can_do.append("✅ Invite users")
+            else:
+                cannot_do.append("❌ Invite users")
+            
+            # Pin messages
+            if member.status == "creator" or getattr(member, "can_pin_messages", False):
+                can_do.append("✅ Pin messages")
+            else:
+                cannot_do.append("❌ Pin messages")
+            
+            # Change group info
+            if member.status == "creator" or getattr(member, "can_change_info", False):
+                can_do.append("✅ Change group info")
+            else:
+                cannot_do.append("❌ Change group info")
+    except Exception:
+        pass
+    
+    # Build message
+    lines = [
+        f"<b>{escape(target.first_name or 'User')}</b>",
+        f"Role: {role}",
+        "",
+        f"<b>Status:</b>",
+        f"Sticker warnings: {count}",
+        f"Kick on next: {'Yes' if kick_on_next else 'No'}",
+        f"Approved: {'Yes' if approved else 'No'}",
+        f"Trusted: {'Yes' if db_trusted else 'No'}",
+        f"Immune: {'Yes' if trusted else 'No'}",
+    ]
+    
+    if can_do or cannot_do:
+        lines.append("")
+        lines.append("<b>━━━ PERMISSIONS ━━━</b>")
+        
+        if can_do:
+            lines.append("")
+            lines.append("<b>✅ Can Do:</b>")
+            lines.extend(can_do)
+        
+        if cannot_do:
+            lines.append("")
+            lines.append("<b>❌ Cannot Do:</b>")
+            lines.extend(cannot_do)
+    
+    await update.effective_message.reply_html("\n".join(lines))
 
 
 async def cmd_makeadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

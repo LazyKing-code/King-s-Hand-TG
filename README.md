@@ -92,7 +92,7 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/setlog` | Send kick/warning logs to another group or channel |
 | `/setkickmsg` | Custom kick message (`{user}` `{name}` `{id}` `{reason}` `{chat}`) |
 | `/setplaceholder` | Sticker to post after a delete |
-| `/strikes` | Show warnings |
+| `/strikes` | Show warnings, role, and permissions for a user |
 | `/forgive` | Clear sticker warnings |
 | `/joins` | How many joins I recorded (1h / 6h / 1d / 7d) |
 | `/purgejoins 2h` | Preview, then `/purgejoins 2h confirm` to ban those joins |
