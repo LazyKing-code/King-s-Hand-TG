@@ -1515,11 +1515,26 @@ def count_active_arena_matches(chat_id: int, kind: str) -> int:
         row = conn.execute(
             """
             SELECT COUNT(*) AS n FROM arena_matches
-            WHERE chat_id=? AND kind=? AND status IN ('pending', 'live')
+            WHERE chat_id=? AND kind=? AND status IN ('pending', 'selecting', 'live')
             """,
             (chat_id, kind),
         ).fetchone()
         return int(row["n"]) if row else 0
+
+
+def user_in_active_arena_match(chat_id: int, kind: str, user_id: int) -> bool:
+    """True if this user is already in a pending/selecting/live match of this kind."""
+    with cursor() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM arena_matches
+            WHERE chat_id=? AND kind=? AND status IN ('pending', 'selecting', 'live')
+              AND (a_id=? OR b_id=?)
+            LIMIT 1
+            """,
+            (chat_id, kind, int(user_id), int(user_id)),
+        ).fetchone()
+        return row is not None
 
 
 def list_expired_arena_matches(now: float | None = None) -> list[dict]:
@@ -1916,11 +1931,19 @@ def finish_giveaway(
 
 
 def reroll_giveaway_winners(giveaway_id: str, winner_ids: list[int]) -> int:
-    """Replace winners on a finished giveaway. Returns new reroll_count (0 if failed)."""
+    """Replace winners on a finished giveaway. Returns new reroll_count (0 if failed).
+
+    Claimed/confirmed status is kept for anyone who remains a winner.
+    """
     giveaway = load_giveaway(giveaway_id)
     if not giveaway or giveaway["status"] != "finished":
         return 0
     winners = [int(x) for x in winner_ids]
+    old_claimed = set(giveaway.get("claimed_ids") or [])
+    old_confirmed = set(giveaway.get("confirmed_ids") or [])
+    # Keep claim state only for winners who stay; claimed also covers confirmed.
+    new_confirmed = [uid for uid in winners if uid in old_confirmed]
+    new_claimed = [uid for uid in winners if uid in old_claimed or uid in old_confirmed]
     with cursor() as conn:
         row = conn.execute(
             """
@@ -1934,10 +1957,15 @@ def reroll_giveaway_winners(giveaway_id: str, winner_ids: list[int]) -> int:
         conn.execute(
             """
             UPDATE giveaways
-            SET winner_ids=?, claimed_ids='[]', confirmed_ids='[]'
+            SET winner_ids=?, claimed_ids=?, confirmed_ids=?
             WHERE id=?
             """,
-            (json.dumps(winners), giveaway_id),
+            (
+                json.dumps(winners),
+                json.dumps(new_claimed),
+                json.dumps(new_confirmed),
+                giveaway_id,
+            ),
         )
         conn.execute(
             """

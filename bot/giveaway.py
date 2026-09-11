@@ -105,9 +105,12 @@ def _claim_board_text(giveaway: dict, *, reroll_count: int = 0) -> str:
     lines.append("")
     if winners and all(uid in confirmed for uid in winners):
         lines.append("All prizes confirmed. Nice.")
+    elif winners and all(uid in claimed or uid in confirmed for uid in winners):
+        lines.append("All winners claimed. Admins: tap <b>Confirm</b> after giving the prize.")
+        lines.append("Reroll is locked while everyone has claimed.")
     else:
         lines.append("Winners: tap <b>Claim Prize</b> so admins know you're active.")
-        lines.append("Admins: <b>Confirm</b> after giving the prize, or <b>Reroll</b> if they don't claim.")
+        lines.append("Admins: <b>Confirm</b> after giving the prize, or <b>Reroll unclaimed</b> only for people who never claim.")
     if reroll_count > 0:
         lines.append(f"\n<i>Rerolled {reroll_count} time(s)</i>")
     lines.append(f"\n<code>id: {escape(giveaway['id'])}</code>")
@@ -116,12 +119,15 @@ def _claim_board_text(giveaway: dict, *, reroll_count: int = 0) -> str:
 
 def _claim_markup(giveaway: dict) -> InlineKeyboardMarkup:
     winners = giveaway.get("winner_ids") or []
+    claimed = set(giveaway.get("claimed_ids") or [])
     confirmed = set(giveaway.get("confirmed_ids") or [])
     gid = giveaway["id"]
     rows: list[list[InlineKeyboardButton]] = []
 
     if winners and not all(uid in confirmed for uid in winners):
-        rows.append([InlineKeyboardButton("🎁 Claim Prize", callback_data=f"gv:claim:{gid}")])
+        still_need_claim = [uid for uid in winners if uid not in claimed and uid not in confirmed]
+        if still_need_claim:
+            rows.append([InlineKeyboardButton("🎁 Claim Prize", callback_data=f"gv:claim:{gid}")])
         confirm_row: list[InlineKeyboardButton] = []
         for uid in winners:
             if uid in confirmed:
@@ -139,7 +145,11 @@ def _claim_markup(giveaway: dict) -> InlineKeyboardMarkup:
                 confirm_row = []
         if confirm_row:
             rows.append(confirm_row)
-        rows.append([InlineKeyboardButton("🎲 Reroll unclaimed", callback_data=f"gv:reroll:{gid}")])
+        # Only allow reroll when someone still has not claimed
+        if still_need_claim:
+            rows.append(
+                [InlineKeyboardButton("🎲 Reroll unclaimed", callback_data=f"gv:reroll:{gid}")]
+            )
     return InlineKeyboardMarkup(rows)
 
 
@@ -193,29 +203,35 @@ async def _refresh_claim_message(bot, giveaway: dict, *, reroll_count: int = 0) 
 
 
 async def _perform_reroll(bot, giveaway: dict) -> tuple[bool, str]:
-    """Reroll unclaimed/unconfirmed winners. Returns (ok, html_or_error)."""
+    """Reroll winners who never claimed. Claimed/confirmed winners are kept."""
     participants = [int(x) for x in (giveaway.get("participants") or [])]
     winners = [int(x) for x in (giveaway.get("winner_ids") or [])]
+    claimed = set(giveaway.get("claimed_ids") or [])
     confirmed = set(giveaway.get("confirmed_ids") or [])
-    keep = [uid for uid in winners if uid in confirmed]
+    # Anyone who claimed OR was confirmed stays — "Reroll unclaimed" means only silent winners
+    keep = [uid for uid in winners if uid in claimed or uid in confirmed]
+    dropped = [uid for uid in winners if uid not in keep]
     need = max(0, giveaway["winner_count"] - len(keep))
     if need == 0:
-        return False, "All winners are already confirmed. Nothing left to reroll."
-    pool = [uid for uid in participants if uid not in keep and uid not in winners]
-    # Also allow previously drawn winners who never claimed to be excluded; if pool too small, include unclaimed old winners' peers only
+        return False, (
+            "Every winner has already claimed (or been confirmed). "
+            "Nothing to reroll — use Confirm after you give the prize."
+        )
+    # Prefer people who were not just dropped for inactivity
+    pool = [uid for uid in participants if uid not in keep and uid not in dropped]
     if len(pool) < need:
         pool = [uid for uid in participants if uid not in keep]
-    if need > 0 and len(pool) < need:
+    if len(pool) < need:
         return False, "Not enough other participants left to reroll."
-    new_extra = random.sample(pool, need) if need else []
+    new_extra = random.sample(pool, need)
     new_winners = keep + new_extra
-    if set(new_winners) == set(winners) and need > 0:
-        # Force a different set when possible
-        alt_pool = [uid for uid in participants if uid not in keep]
-        if len(alt_pool) >= need:
-            random.shuffle(alt_pool)
-            new_extra = alt_pool[:need]
+    # Avoid identical full set when possible
+    if set(new_winners) == set(winners):
+        alt = [uid for uid in pool if uid not in new_extra]
+        if alt:
+            new_extra = new_extra[:-1] + [random.choice(alt)]
             new_winners = keep + new_extra
+
     reroll_count = db.reroll_giveaway_winners(giveaway["id"], new_winners)
     if not reroll_count:
         return False, "Could not reroll that giveaway."
@@ -229,11 +245,20 @@ async def _perform_reroll(bot, giveaway: dict) -> tuple[bool, str]:
         _ended_text(fresh["prize"], fresh["winner_ids"], giveaway_id=fresh["id"]),
     )
     await _refresh_claim_message(bot, fresh, reroll_count=reroll_count)
+
+    kept_text = _winner_mentions(keep) if keep else "none"
+    new_text = _winner_mentions(new_extra) if new_extra else "none"
+    claim_note = (
+        "New winners must claim. Claimed winners were kept."
+        if keep
+        else "New winners must claim."
+    )
     return True, (
         f"🎲 <b>Giveaway Rerolled!</b>\n\n"
         f"Prize: <b>{escape(fresh['prize'])}</b>\n"
-        f"🏆 New Winner(s): {_winner_mentions(fresh['winner_ids'])}\n\n"
-        f"Reroll #{reroll_count}. Winners must claim again."
+        f"Kept (already claimed): {kept_text}\n"
+        f"New winner(s): {new_text}\n\n"
+        f"Reroll #{reroll_count}. {claim_note}"
     )
 
 

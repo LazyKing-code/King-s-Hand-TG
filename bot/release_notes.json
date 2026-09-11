@@ -306,5 +306,45 @@
         "/greroll now finds the giveaway from either the original post or the winner board, and /ghistory shows each giveaway id so you can reroll by id if needed."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.16",
+    "date": "11 September 2026",
+    "headline": "Claimed winners are protected from reroll",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Claim Protection",
+        "If a winner already tapped Claim Prize, they can no longer be wiped by Reroll unclaimed. Reroll only replaces people who never claimed, keeps claim status for anyone who stays, hides the reroll button once everyone has claimed, and tells admins to Confirm instead."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.17",
+    "date": "11 September 2026",
+    "headline": "Cricket: accept before overs",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Hand Cricket Flow",
+        "/cricket now asks the rival to Accept or Decline first. Only after they accept does the challenger pick 1, 2, or 3 overs. Overs buttons no longer show before both sides are in."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.18",
+    "date": "11 September 2026",
+    "headline": "Cricket: one match per person, 1-min accept",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "One Match Per Person",
+        "You (and your opponent) can only be in one cricket or rps match at a time - pending, picking overs, or live. Starting a second one is blocked until the first ends."
+      ],
+      [
+        "Faster Accept Timeout",
+        "If the other person does not Accept or Decline within 1 minute, the challenge cancels itself automatically."
+      ]
+    ]
   }
 ]

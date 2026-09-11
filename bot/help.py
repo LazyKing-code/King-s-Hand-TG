@@ -52,8 +52,8 @@ def _pages() -> dict[str, str]:
         ),
         "games": (
             "<b>Games</b>\n\n"
-            f"<b>{cmd('cricket')}</b> @username — hand cricket with over selection. "
-            "Default is 1 over (6 balls each). You can choose 1, 2, or 3 overs. "
+            f"<b>{cmd('cricket')}</b> @username — hand cricket. Rival Accepts first, "
+            "then the challenger picks 1–3 overs (1 over = 6 balls each). "
             "Both pick 1–6 every ball; matching numbers = out. Highest total wins.\n"
             f"<blockquote>{cmd('cricket')} @username</blockquote>\n"
             f"<b>{cmd('rps')}</b> @username — one round of rock-paper-scissors.\n"
@@ -67,7 +67,8 @@ def _pages() -> dict[str, str]:
             "other periods\n\n"
             "<b>Note:</b> Cricket now has smoother gameplay with spam protection (500ms cooldown). "
             "At most 3 matches of each game can run at once per group. "
-            "A challenge that nobody accepts in 3 minutes, or a match with no "
+            "A person can only be in one cricket (or rps) match at a time. "
+            "A challenge that nobody accepts in 1 minute, or a match with no "
             "move for 5 minutes, closes on its own."
         ),
         "fun": (

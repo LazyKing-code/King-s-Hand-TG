@@ -102,7 +102,7 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/scold` | Funny scolding (reply or @username); new line each time |
 | `/ask [question]` | Ask anything - Wikipedia first, then web search for recent topics |
 | `/tag` | Set a member tag; `/tag null` clears it |
-| `/cricket @user` | Hand cricket with over selection (1, 2, or 3 overs). Default: 1 over (6 balls each). Matching picks = out |
+| `/cricket @user` | Hand cricket. Accept first, then challenger picks 1–3 overs. Matching picks = out |
 | `/rps @user` | One round of rock-paper-scissors |
 | `/gboard` | Games leaderboard, last 3 days. `/gboard cricket` / `/gboard rps` — paginated match history |
 | `/active` | Activity leaderboard (daily/weekly/monthly) - who sends the most messages |
@@ -129,13 +129,14 @@ During an active flood: `/raidmode 1h` then later `/purgejoins 2h` → `/purgejo
 `/cricket` and `/rps` are text + button matches, all state kept in the database (no images, no in-memory state to lose on restart). 
 
 **Cricket improvements:**
-- **Over selection**: Choose 1, 2, or 3 overs when starting (default: 1 over = 6 balls each)
+- **Accept first**: Rival Accepts/Declines the challenge before overs are chosen
+- **Over selection**: After accept, challenger picks 1, 2, or 3 overs (1 over = 6 balls each)
 - **Better UI**: Clean table format with clear scoreboard and batting/bowling info
 - **Opponent names**: Shows "Waiting for [name]..." instead of "other pick"
 - **Spam protection**: 500ms cooldown between button clicks to prevent lag
 - **Smooth gameplay**: Instant feedback with emojis and clear status messages
 
-At most 3 matches of each game run at once per group. An unaccepted challenge auto-closes after 3 minutes; a live match with no move for 5 minutes auto-closes with no result recorded. Match history (`/gboard cricket` / `/gboard rps`) only keeps the last 3 days.
+At most 3 matches of each game run at once per group. The same person cannot be in two cricket (or rps) matches at the same time. An unaccepted challenge auto-closes after 1 minute; a live match with no move for 5 minutes auto-closes with no result recorded. Match history (`/gboard cricket` / `/gboard rps`) only keeps the last 3 days.
 
 **Important:** When challenging someone with `/cricket @username`, you must either:
 - Reply to their message, or

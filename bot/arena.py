@@ -44,7 +44,7 @@ from bot.moderation import require_group
 
 log = logging.getLogger(__name__)
 
-ACCEPT_TTL = 3 * 60       # pending challenge must be accepted within 3 min
+ACCEPT_TTL = 60           # pending challenge must be accepted within 1 min
 IDLE_TTL = 5 * 60         # a live match with no move for 5 min auto-closes
 MAX_CONCURRENT = 3        # per chat, per kind
 RESULT_RETENTION_DAYS = 3
@@ -152,6 +152,19 @@ async def _start_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE, k
                 f"this chat. Wait for one to finish before starting another."
             )
             return
+        # One person = one match of this game at a time (pending/selecting/live)
+        if db.user_in_active_arena_match(chat_id, kind, challenger.id):
+            await msg.reply_text(
+                f"You're already in a {KIND_LABEL[kind]} match. "
+                "Finish or let it expire before starting another."
+            )
+            return
+        if db.user_in_active_arena_match(chat_id, kind, rival.id):
+            await msg.reply_text(
+                f"{_clean_name(rival)} is already in a {KIND_LABEL[kind]} match. "
+                "Wait until that one ends."
+            )
+            return
         db.create_arena_match(
             match_id, chat_id, kind, challenger.id, rival.id, payload,
             deadline=_now() + ACCEPT_TTL,
@@ -162,7 +175,7 @@ async def _start_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE, k
         f"<b>{escape(KIND_LABEL[kind].title())} challenge</b>\n"
         f"{_mention(challenger.id, a_name)} challenged {_mention(rival.id, b_name)}.\n"
         + (_cricket_rules_line() if kind == KIND_CRICKET else _rps_rules_line())
-        + f"\n{_mention(rival.id, b_name)} — Accept or decline within 3 minutes."
+        + f"\n{_mention(rival.id, b_name)} — Accept or decline within 1 minute."
     )
     markup = InlineKeyboardMarkup([[
         InlineKeyboardButton("Accept", callback_data=f"g:{code}:ok:{match_id}"),
@@ -178,8 +191,8 @@ def _mention(user_id: int, name: str) -> str:
 
 def _cricket_rules_line() -> str:
     return (
-        "One over each (max 6 balls). Both pick 1-6 every ball — matching "
-        "numbers means the batter is out. Highest total wins."
+        "After accept, the challenger picks 1–3 overs. Both pick 1-6 every ball — "
+        "matching numbers means the batter is out. Highest total wins."
     )
 
 
@@ -188,64 +201,8 @@ def _rps_rules_line() -> str:
 
 
 async def cmd_cricket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Start cricket with over selection."""
-    if not await require_group(update):
-        return
-    msg = update.effective_message
-    challenger = update.effective_user
-    rival = await resolve_member(update, context)
-    if not challenger:
-        return
-    if not rival:
-        await msg.reply_text(
-            "Can't find that user. Try this:\n"
-            "• Reply to their message, or\n"
-            f"• Type {cmd('cricket')} @ and select their name from Telegram's suggestion list\n\n"
-            "If they've never sent a message here, ask them to send any message first."
-        )
-        return
-    if rival.id == challenger.id:
-        await msg.reply_text("Challenge someone else — not yourself.")
-        return
-    if rival.is_bot:
-        await msg.reply_text("Bots don't play. Challenge a human.")
-        return
-    
-    # Show over selection
-    chat_id = update.effective_chat.id
-    temp_id = _new_match_id()
-    a_name, b_name = _clean_name(challenger), _clean_name(rival)
-    
-    text = (
-        f"<b>🏏 Hand Cricket Challenge</b>\n\n"
-        f"{_mention(challenger.id, a_name)} wants to challenge {_mention(rival.id, b_name)}\n\n"
-        f"Select number of overs (1 over = 6 balls each):"
-    )
-    
-    # Store rival info temporarily in match with special status
-    payload = {
-        "challenger_id": challenger.id,
-        "rival_id": rival.id,
-        "a_name": a_name,
-        "b_name": b_name,
-        "temp": True,
-    }
-    
-    markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("1 Over", callback_data=f"g:cr:ov:{temp_id}:1"),
-        InlineKeyboardButton("2 Overs", callback_data=f"g:cr:ov:{temp_id}:2"),
-        InlineKeyboardButton("3 Overs", callback_data=f"g:cr:ov:{temp_id}:3"),
-    ]])
-    
-    sent = await msg.reply_html(text, reply_markup=markup, disable_web_page_preview=True)
-    
-    # Store temporary data
-    db.create_arena_match(
-        temp_id, chat_id, KIND_CRICKET, challenger.id, rival.id, payload,
-        deadline=_now() + 60,  # 1 minute to select
-        status="selecting",
-    )
-    db.set_arena_match_message(temp_id, sent.message_id)
+    """Start a cricket challenge — accept first, then overs."""
+    await _start_challenge(update, context, KIND_CRICKET)
 
 
 async def cmd_rps(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -452,49 +409,34 @@ async def on_arena_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def _handle_over_select(query, context, match: dict, user: User, overs_str: str) -> None:
-    """Handle over selection for cricket."""
+    """Challenger picks overs after the rival has accepted."""
     if match["status"] != "selecting":
-        await query.answer("Already started.", show_alert=True)
+        await query.answer("Overs already chosen, or this challenge is not ready.", show_alert=True)
         return
-    
-    payload = match["payload"]
-    if user.id != payload["challenger_id"]:
-        await query.answer("Only the challenger can select overs.", show_alert=True)
+    if user.id != match["a_id"]:
+        await query.answer("Only the challenger picks the overs.", show_alert=True)
         return
-    
+
     try:
         overs = int(overs_str)
     except ValueError:
         overs = 1
-    
-    overs = max(1, min(3, overs))  # Clamp between 1-3
-    
-    # Now create the actual challenge
-    a_name = payload["a_name"]
-    b_name = payload["b_name"]
-    
-    text = (
-        f"<b>🏏 Hand Cricket Challenge ({overs} over{'s' if overs > 1 else ''})</b>\n"
-        f"{_mention(payload['challenger_id'], a_name)} challenged {_mention(payload['rival_id'], b_name)}.\n\n"
-        f"<b>Rules:</b> {overs} over{'s' if overs > 1 else ''} each ({overs * 6} balls). "
-        f"Both pick 1-6 every ball — matching numbers = out. Highest total wins.\n\n"
-        f"{_mention(payload['rival_id'], b_name)} — Accept or decline within 3 minutes."
+    overs = max(1, min(3, overs))
+
+    batter = random.choice([match["a_id"], match["b_id"]])
+    payload = logic.cricket_new(match["a_id"], match["b_id"], batter=batter, overs=overs)
+    payload["a_name"] = match["payload"].get("a_name", "Player A")
+    payload["b_name"] = match["payload"].get("b_name", "Player B")
+
+    db.save_arena_match(match["id"], payload, status="live", deadline=_now() + IDLE_TTL)
+    await query.answer(f"{overs} over{'s' if overs > 1 else ''} — game on!")
+    await _edit(
+        context,
+        match["chat_id"],
+        match["message_id"],
+        _cricket_text(payload),
+        _cricket_keyboard(match["id"]),
     )
-    
-    new_payload = {
-        "a_name": a_name,
-        "b_name": b_name,
-        "overs": overs,
-    }
-    
-    markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Accept", callback_data=f"g:cr:ok:{match['id']}"),
-        InlineKeyboardButton("❌ Decline", callback_data=f"g:cr:no:{match['id']}"),
-    ]])
-    
-    db.save_arena_match(match["id"], new_payload, status="pending", deadline=_now() + ACCEPT_TTL)
-    await query.answer(f"{overs} over{'s' if overs > 1 else ''} selected!")
-    await _edit(context, match["chat_id"], match["message_id"], text, markup)
 
 
 async def _handle_accept(query, context, match: dict, user: User) -> None:
@@ -506,19 +448,39 @@ async def _handle_accept(query, context, match: dict, user: User) -> None:
         return
     kind = match["kind"]
     if kind == KIND_CRICKET:
-        batter = random.choice([match["a_id"], match["b_id"]])
-        overs = match["payload"].get("overs", 1)
-        payload = logic.cricket_new(match["a_id"], match["b_id"], batter=batter, overs=overs)
-        payload["a_name"], payload["b_name"] = match["payload"]["a_name"], match["payload"]["b_name"]
-        text = _cricket_text(payload)
-        markup = _cricket_keyboard(match["id"])
-    else:
-        payload = logic.rps_new(match["a_id"], match["b_id"])
-        payload["a_name"], payload["b_name"] = match["payload"]["a_name"], match["payload"]["b_name"]
-        text = _rps_text(payload)
-        markup = _rps_keyboard(match["id"])
+        # Rival accepted — challenger picks overs next
+        a_name = match["payload"].get("a_name", "Player A")
+        b_name = match["payload"].get("b_name", "Player B")
+        payload = {
+            "a_name": a_name,
+            "b_name": b_name,
+            "accepted": True,
+        }
+        text = (
+            f"<b>🏏 Hand Cricket</b>\n"
+            f"{_mention(match['b_id'], b_name)} accepted "
+            f"{_mention(match['a_id'], a_name)}'s challenge.\n\n"
+            f"{_mention(match['a_id'], a_name)} — pick overs to start "
+            f"(1 over = 6 balls each):"
+        )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("1 Over", callback_data=f"g:cr:ov:{match['id']}:1"),
+            InlineKeyboardButton("2 Overs", callback_data=f"g:cr:ov:{match['id']}:2"),
+            InlineKeyboardButton("3 Overs", callback_data=f"g:cr:ov:{match['id']}:3"),
+        ]])
+        db.save_arena_match(
+            match["id"], payload, status="selecting", deadline=_now() + ACCEPT_TTL
+        )
+        await query.answer("Accepted! Waiting for overs.")
+        await _edit(context, match["chat_id"], match["message_id"], text, markup)
+        return
+
+    payload = logic.rps_new(match["a_id"], match["b_id"])
+    payload["a_name"], payload["b_name"] = match["payload"]["a_name"], match["payload"]["b_name"]
+    text = _rps_text(payload)
+    markup = _rps_keyboard(match["id"])
     db.save_arena_match(match["id"], payload, status="live", deadline=_now() + IDLE_TTL)
-    await query.answer("Accepted! Game on! 🏏")
+    await query.answer("Accepted! Game on!")
     await _edit(context, match["chat_id"], match["message_id"], text, markup)
 
 
@@ -650,6 +612,11 @@ async def sweep_idle_matches_once(application) -> int:
                 text = (
                     f"{KIND_LABEL[fresh['kind']].capitalize()} challenge expired — "
                     "nobody accepted in time."
+                )
+            elif fresh["status"] == "selecting":
+                text = (
+                    f"{KIND_LABEL[fresh['kind']].capitalize()} challenge expired — "
+                    "overs were not chosen in time."
                 )
             else:
                 text = (
