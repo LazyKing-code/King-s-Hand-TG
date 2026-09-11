@@ -56,7 +56,7 @@ Keep this window open, or later run it as a Windows service / Task Scheduler.
 
 Remove **Rose** (or any other group bot) **before** or right after this deploy, or both will answer `/kick` and `/lock`.
 
-Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcome` `/daily` `/gamehelp`.
+Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcome`.
 
 ## Commands (reply to a user or sticker)
 
@@ -79,7 +79,7 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/filter` · `/stop` | Auto-reply when a keyword is used |
 | `/blacklist` | Delete messages that contain a word |
 | `/zombies` | Preview deleted accounts. `/zombies confirm` kicks now. Daily auto-clean is on (`/zombies daily off` to stop). Frozen accounts are not visible to bots. |
-| `/makeadmin` | Make them admin via this bot (needed for auto-demote) |
+| `/makeadmin` | Make them admin via this bot (needed for auto-demote). Optional role: `helper`, `mod` (default), `admin` |
 | `/dropadmin` | Remove one admin |
 | `/dropadmins` | Remove every admin the bot can (`/dropadmins confirm`) |
 | `/approve` | Bypass until they send a banned sticker |
@@ -100,19 +100,10 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/unlock` | Restore permissions |
 | `/flood on` | Anti-flood (`/flood 6 4`, `/floodmute 10m`) |
 | `/scold` | Funny scolding (reply or @username); new line each time |
-| `/gamehelp` | Games guide (buttons). Also `/gamehelp four` |
-| `/daily` | Daily coins + streak (resets at midnight IST) |
-| `/balance` | Coins, overall W/L, and per-game W/L/D |
-| `/top` | Points board, or `/top cricket` `/top four` (wins/losses) |
-| `/toss` | Coin toss. Solo: `heads`/`tails`. Reply to challenge a friend |
-| `/dice` | Telegram dice, or reply to duel |
-| `/lucky7` | Two dice: `low` / `7` / `high` (fun coins only) |
-| `/rps` | Stone-paper-scissors vs a member |
-| `/cricket` | Hand cricket vs a member (one over each) |
-| `/four` | Four in a row vs a member (visual board) |
-| `/penalty` | Penalty duel — five kicks each |
-| `/vault` | Share the pot or take it all |
 | `/tag` | Set a member tag; `/tag null` clears it |
+| `/cricket @user` | Hand cricket, one over each. Both pick 1-6 each ball; matching = out |
+| `/rps @user` | One round of rock-paper-scissors |
+| `/lb` | Games leaderboard, last 3 days. `/lb cricket` / `/lb rps` — paginated match history |
 | `/whatsnew` | Official update card (also sent in private to people who `/start`) |
 | `/release send` | Owner only: deliver that card to known starters |
 | `/help` | Command guide |
@@ -126,4 +117,8 @@ Only the group owner and `OWNER_IDS` can use these.
 Telegram does not give bots join dates for people already in the group. This bot records joins while it is running (up to 7 days). Keep it online as admin.
 
 During an active flood: `/raidmode 1h` then later `/purgejoins 2h` → `/purgejoins 2h confirm`.
+
+## Games
+
+`/cricket` and `/rps` are text + button matches, all state kept in the database (no images, no in-memory state to lose on restart). At most 3 matches of each game run at once per group. An unaccepted challenge auto-closes after 3 minutes; a live match with no move for 5 minutes auto-closes with no result recorded. Match history (`/lb cricket` / `/lb rps`) only keeps the last 3 days.
 

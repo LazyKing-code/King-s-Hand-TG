@@ -270,21 +270,79 @@ async def format_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id:
         return f"<code>{user_id}</code>"
 
 
-def _admin_rights_kwargs(bot_member, chat, *, grant: bool) -> dict:
-    """Only set rights Telegram allows this bot to grant. Skip forum-only flags
-    on normal groups — passing can_manage_topics there makes promote fail."""
+# Roles this bot will offer when promoting. Each is a set of the admin
+# rights it will *try* to grant — it can still only grant a right the bot
+# itself has, and it never grants can_promote_members (so an admin it made
+# can never add/remove other admins, or edit itself out of demotion).
+_ROLE_RIGHTS: dict[str, tuple[str, ...]] = {
+    "helper": ("can_delete_messages", "can_pin_messages"),
+    "mod": (
+        "can_delete_messages",
+        "can_restrict_members",
+        "can_invite_users",
+        "can_pin_messages",
+        "can_manage_video_chats",
+    ),
+    "admin": (
+        "can_manage_chat",
+        "can_delete_messages",
+        "can_restrict_members",
+        "can_invite_users",
+        "can_pin_messages",
+        "can_manage_video_chats",
+        "can_change_info",
+    ),
+}
+_ROLE_ALIASES = {
+    "moderator": "mod",
+    "mods": "mod",
+    "full": "admin",
+    "senior": "admin",
+    "minimal": "helper",
+    "light": "helper",
+    "junior": "helper",
+}
+DEFAULT_ADMIN_ROLE = "mod"
+ROLE_NAMES = tuple(_ROLE_RIGHTS.keys())
+
+_ROLE_DESCRIPTIONS = {
+    "helper": "Can delete messages and pin. Cannot mute, ban, kick, or invite.",
+    "mod": "Can delete messages, mute/ban/kick, invite, pin, and manage video chats.",
+    "admin": "Everything mod has, plus manage chat settings and change group info.",
+}
+
+
+def parse_admin_role(args: list[str]) -> str:
+    """Pick a known role out of free-form command args. Defaults to mod."""
+    for raw in args:
+        key = _ROLE_ALIASES.get(raw.strip().lower(), raw.strip().lower())
+        if key in _ROLE_RIGHTS:
+            return key
+    return DEFAULT_ADMIN_ROLE
+
+
+def role_description(role: str) -> str:
+    return _ROLE_DESCRIPTIONS.get(role, _ROLE_DESCRIPTIONS[DEFAULT_ADMIN_ROLE])
+
+
+def _admin_rights_kwargs(bot_member, chat, *, grant: bool, role: str = DEFAULT_ADMIN_ROLE) -> dict:
+    """Only set rights Telegram allows this bot to grant, filtered to what the
+    chosen role wants. Skip forum-only flags on normal groups — passing
+    can_manage_topics there makes promote fail. Never grants can_promote_members:
+    an admin this bot makes can never make/edit other admins."""
+    wanted = set(_ROLE_RIGHTS.get(role, _ROLE_RIGHTS[DEFAULT_ADMIN_ROLE])) if grant else set()
 
     def bit(name: str) -> bool:
-        return bool(grant and getattr(bot_member, name, False))
+        return bool(grant and name in wanted and getattr(bot_member, name, False))
 
     flags = {
         "is_anonymous": False,
         "can_manage_chat": bit("can_manage_chat"),
         "can_delete_messages": bit("can_delete_messages"),
         "can_manage_video_chats": bit("can_manage_video_chats"),
-        "can_restrict_members": False,
+        "can_restrict_members": bit("can_restrict_members"),
         "can_promote_members": False,
-        "can_change_info": False,
+        "can_change_info": bit("can_change_info"),
         "can_invite_users": bit("can_invite_users"),
         "can_pin_messages": bit("can_pin_messages"),
     }
@@ -300,6 +358,8 @@ def _has_grantable_right(flags: dict) -> bool:
             "can_manage_chat",
             "can_delete_messages",
             "can_manage_video_chats",
+            "can_restrict_members",
+            "can_change_info",
             "can_invite_users",
             "can_pin_messages",
         )
@@ -310,18 +370,20 @@ async def promote_limited(
     context: ContextTypes.DEFAULT_TYPE,
     chat,
     user_id: int,
-) -> None:
+    *,
+    role: str = DEFAULT_ADMIN_ROLE,
+) -> dict:
     bot_id = context.bot.id
     me = await context.bot.get_chat_member(chat.id, bot_id)
     if me.status not in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
         raise ValueError("I am not an admin in this group.")
     if me.status == ChatMember.ADMINISTRATOR and not me.can_promote_members:
         raise ValueError("I need the Add new admins permission.")
-    flags = _admin_rights_kwargs(me, chat, grant=True)
+    flags = _admin_rights_kwargs(me, chat, grant=True, role=role)
     if not _has_grantable_right(flags):
         raise ValueError(
-            "I need Delete messages (and ideally Pin messages and Invite users) "
-            "so I have something to grant."
+            "I need Delete messages (and ideally Restrict members, Pin messages, "
+            "and Invite users) so I have something to grant."
         )
     target = await context.bot.get_chat_member(chat.id, user_id)
     if target.status == ChatMember.OWNER:
@@ -334,6 +396,7 @@ async def promote_limited(
             f"edit their rights. Drop them in Telegram, then {cmd('makeadmin')} again."
         )
     await context.bot.promote_chat_member(chat_id=chat.id, user_id=user_id, **flags)
+    return flags
 
 
 _DEMOTE_FLAGS = {

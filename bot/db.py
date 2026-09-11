@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -162,6 +163,36 @@ def init() -> None:
                 updated_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_seen_users_username ON seen_users(username);
+            CREATE TABLE IF NOT EXISTS arena_matches (
+                id TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                a_id INTEGER NOT NULL,
+                b_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                deadline REAL NOT NULL,
+                message_id INTEGER,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_arena_matches_chat_kind
+                ON arena_matches(chat_id, kind, status);
+            CREATE INDEX IF NOT EXISTS idx_arena_matches_deadline ON arena_matches(deadline);
+            CREATE TABLE IF NOT EXISTS arena_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                a_id INTEGER NOT NULL,
+                a_name TEXT NOT NULL,
+                b_id INTEGER NOT NULL,
+                b_name TEXT NOT NULL,
+                winner_id INTEGER,
+                summary TEXT NOT NULL,
+                finished_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_arena_results_chat_kind
+                ON arena_results(chat_id, kind, finished_at);
             """
         )
         _ensure_column(conn, "chat_settings", "log_chat_id", "INTEGER")
@@ -1295,3 +1326,185 @@ def set_bot_user_release(user_id: int, release_id: str) -> None:
 def drop_bot_user(user_id: int) -> None:
     with cursor() as conn:
         conn.execute("DELETE FROM bot_users WHERE user_id=?", (user_id,))
+
+
+# ---------------------------------------------------------------------------
+# Arena (cricket / rock-paper-scissors matches + leaderboard history)
+# ---------------------------------------------------------------------------
+
+
+def create_arena_match(
+    match_id: str,
+    chat_id: int,
+    kind: str,
+    a_id: int,
+    b_id: int,
+    payload: dict,
+    *,
+    deadline: float,
+) -> None:
+    now = time.time()
+    with cursor() as conn:
+        conn.execute(
+            """
+            INSERT INTO arena_matches(
+                id, chat_id, kind, status, a_id, b_id,
+                created_at, updated_at, deadline, message_id, payload
+            ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, NULL, ?)
+            """,
+            (match_id, chat_id, kind, a_id, b_id, now, now, deadline, json.dumps(payload)),
+        )
+
+
+def _row_to_match(row: sqlite3.Row) -> dict:
+    try:
+        payload = json.loads(row["payload"])
+    except json.JSONDecodeError:
+        payload = {}
+    return {
+        "id": str(row["id"]),
+        "chat_id": int(row["chat_id"]),
+        "kind": str(row["kind"]),
+        "status": str(row["status"]),
+        "a_id": int(row["a_id"]),
+        "b_id": int(row["b_id"]),
+        "created_at": float(row["created_at"]),
+        "updated_at": float(row["updated_at"]),
+        "deadline": float(row["deadline"]),
+        "message_id": int(row["message_id"]) if row["message_id"] is not None else None,
+        "payload": payload if isinstance(payload, dict) else {},
+    }
+
+
+def load_arena_match(match_id: str) -> dict | None:
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT * FROM arena_matches WHERE id=?", (match_id,)
+        ).fetchone()
+    return _row_to_match(row) if row else None
+
+
+def set_arena_match_message(match_id: str, message_id: int) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE arena_matches SET message_id=? WHERE id=?",
+            (message_id, match_id),
+        )
+
+
+def save_arena_match(
+    match_id: str,
+    payload: dict,
+    *,
+    status: str,
+    deadline: float,
+) -> None:
+    with cursor() as conn:
+        conn.execute(
+            """
+            UPDATE arena_matches
+            SET payload=?, status=?, deadline=?, updated_at=?
+            WHERE id=?
+            """,
+            (json.dumps(payload), status, deadline, time.time(), match_id),
+        )
+
+
+def delete_arena_match(match_id: str) -> None:
+    with cursor() as conn:
+        conn.execute("DELETE FROM arena_matches WHERE id=?", (match_id,))
+
+
+def count_active_arena_matches(chat_id: int, kind: str) -> int:
+    with cursor() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM arena_matches
+            WHERE chat_id=? AND kind=? AND status IN ('pending', 'live')
+            """,
+            (chat_id, kind),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
+
+def list_expired_arena_matches(now: float | None = None) -> list[dict]:
+    stamp = time.time() if now is None else now
+    with cursor() as conn:
+        rows = conn.execute(
+            "SELECT * FROM arena_matches WHERE deadline < ?", (stamp,)
+        ).fetchall()
+    return [_row_to_match(r) for r in rows]
+
+
+def save_arena_result(
+    chat_id: int,
+    kind: str,
+    a_id: int,
+    a_name: str,
+    b_id: int,
+    b_name: str,
+    winner_id: int | None,
+    summary: str,
+    *,
+    finished_at: float | None = None,
+) -> None:
+    with cursor() as conn:
+        conn.execute(
+            """
+            INSERT INTO arena_results(
+                chat_id, kind, a_id, a_name, b_id, b_name, winner_id, summary, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chat_id, kind, a_id, a_name, b_id, b_name, winner_id, summary,
+                finished_at if finished_at is not None else time.time(),
+            ),
+        )
+
+
+def list_arena_results(
+    chat_id: int,
+    kind: str | None,
+    since: float,
+) -> list[dict]:
+    """All results for a chat (optionally filtered to one kind) since a
+    timestamp, newest first. Small per-chat volume with a 3-day retention —
+    fine to load in full and paginate/aggregate in Python."""
+    with cursor() as conn:
+        if kind:
+            rows = conn.execute(
+                """
+                SELECT * FROM arena_results
+                WHERE chat_id=? AND kind=? AND finished_at>=?
+                ORDER BY finished_at DESC
+                """,
+                (chat_id, kind, since),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM arena_results
+                WHERE chat_id=? AND finished_at>=?
+                ORDER BY finished_at DESC
+                """,
+                (chat_id, since),
+            ).fetchall()
+    return [
+        {
+            "kind": str(r["kind"]),
+            "a_id": int(r["a_id"]),
+            "a_name": str(r["a_name"]),
+            "b_id": int(r["b_id"]),
+            "b_name": str(r["b_name"]),
+            "winner_id": int(r["winner_id"]) if r["winner_id"] is not None else None,
+            "summary": str(r["summary"]),
+            "finished_at": float(r["finished_at"]),
+        }
+        for r in rows
+    ]
+
+
+def purge_arena_results(before: float) -> int:
+    with cursor() as conn:
+        cur = conn.execute("DELETE FROM arena_results WHERE finished_at < ?", (before,))
+        return cur.rowcount

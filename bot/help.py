@@ -21,7 +21,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('rules')}</b> · <b>{cmd('id')}</b> · <b>{cmd('stats')}</b>\n"
             f"<b>{cmd('notes')}</b> · send <code>#name</code> for a saved note\n"
             f"<b>{cmd('staff')}</b> — reply to ping admins\n"
-            f"<b>{cmd('whatsnew')}</b> — latest official update\n\n"
+            f"<b>{cmd('whatsnew')}</b> — latest official update\n"
+            f"<b>{cmd('cricket')}</b> · <b>{cmd('rps')}</b> · <b>{cmd('lb')}</b> — games (tap Games)\n\n"
             "<b>Fun</b> — whisper, scold, calculator (tap Fun)\n\n"
             "Mute / ban / lock / raid tools are not listed here. "
             "Admins and owners see extra buttons."
@@ -43,7 +44,22 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('whatsnew')}</b> — this release · "
             f"<code>{cmd('whatsnew')} history</code>\n\n"
             "<b>Calculator</b> — send only the sum, no command.\n"
-            "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>"
+            "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>\n\n"
+            "<b>Games</b> — tap Games below for cricket, rock-paper-scissors, and the board."
+        ),
+        "games": (
+            "<b>Games</b>\n\n"
+            f"<b>{cmd('cricket')}</b> @username — hand cricket, one over each. "
+            "Both pick 1–6 every ball; matching numbers = out. Highest total wins.\n"
+            f"<blockquote>{cmd('cricket')} @username</blockquote>\n"
+            f"<b>{cmd('rps')}</b> @username — one round of rock-paper-scissors.\n"
+            f"<blockquote>{cmd('rps')} @username</blockquote>\n"
+            f"<b>{cmd('lb')}</b> — leaderboard for the last 3 days\n"
+            f"<b>{cmd('lb')} cricket</b> · <b>{cmd('lb')} rps</b> — match history, "
+            "with times, 5 per page\n\n"
+            "At most 3 matches of each game can run at once per group. "
+            "A challenge that nobody accepts in 3 minutes, or a match with no "
+            "move for 5 minutes, closes on its own."
         ),
         "fun": (
             "<b>Fun</b>\n\n"
@@ -116,7 +132,8 @@ def _pages() -> dict[str, str]:
             f"<blockquote>{cmd('tagall')}\n{cmd('tagall')} meeting in 5</blockquote>\n"
             f"<b>{cmd('approve')}</b> · <b>{cmd('unapprove')}</b> · "
             f"<b>{cmd('trust')}</b> · <b>{cmd('untrust')}</b>\n"
-            f"<b>{cmd('makeadmin')}</b> · <b>{cmd('dropadmin')}</b> · "
+            f"<b>{cmd('makeadmin')}</b> @user [role] — roles: helper, mod (default), admin\n"
+            f"<b>{cmd('dropadmin')}</b> · "
             f"<b>{cmd('dropadmins')} confirm</b>\n"
             f"<b>{cmd('raidmode')}</b> · <b>{cmd('purgejoins')}</b>\n"
             f"<blockquote>{cmd('purgejoins')} 2h\n{cmd('purgejoins')} 2h confirm</blockquote>\n"
@@ -180,6 +197,9 @@ def _markup(
         [
             InlineKeyboardButton("Everyone", callback_data="help:you"),
             InlineKeyboardButton("Stickers", callback_data="help:stickers"),
+        ],
+        [
+            InlineKeyboardButton("Games", callback_data="help:games"),
         ],
     ]
     staff_row: list[InlineKeyboardButton] = []
@@ -248,6 +268,12 @@ _ALIASES = {
     "overview": "index",
     "whatsnew": "fun",
     "release": "owner",
+    "games": "games",
+    "game": "games",
+    "cricket": "games",
+    "rps": "games",
+    "lb": "games",
+    "leaderboard": "games",
 }
 
 

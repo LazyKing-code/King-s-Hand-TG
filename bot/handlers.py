@@ -16,6 +16,7 @@ from bot.invite import ADD_TEXT, bot_username, pick_keyboard, url_buttons
 from bot.release import deliver_if_needed
 from bot.moderation import (
     DEFAULT_KICK_MSG,
+    ROLE_NAMES,
     announce_kick,
     apply_punishment,
     demote,
@@ -27,10 +28,12 @@ from bot.moderation import (
     is_owner,
     kick,
     mention,
+    parse_admin_role,
     promote_limited,
     require_group_admin,
     require_group_owner,
     resolve_target,
+    role_description,
 )
 
 from bot.nsfw import is_nsfw_sticker
@@ -776,18 +779,22 @@ async def cmd_makeadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     target = await resolve_target(update, context)
     if not target:
+        roles = ", ".join(ROLE_NAMES)
         await update.effective_message.reply_text(
             "Who should I make admin? Reply to one of their messages, "
-            f"or send {cmd('makeadmin')} @username.\n"
+            f"or send {cmd('makeadmin')} @username [role].\n"
+            f"Roles: {roles} (default: mod). Example: {cmd('makeadmin')} @username helper\n"
             "If they are already admin, drop them in Telegram first "
             "(I can only change people I promoted)."
         )
         return
+    role = parse_admin_role(context.args or [])
     try:
-        await promote_limited(context, update.effective_chat, target.id)
+        await promote_limited(context, update.effective_chat, target.id, role=role)
         db.reset_strikes(update.effective_chat.id, target.id)
         await update.effective_message.reply_html(
-            f"{mention(target)} is now admin via this bot.\n"
+            f"{mention(target)} is now admin via this bot — role: <b>{role}</b>.\n"
+            f"{escape(role_description(role))}\n"
             "They cannot add/remove admins or kick the bot. "
             "If they hit 3 sticker warnings, I can drop them."
         )

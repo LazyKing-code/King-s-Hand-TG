@@ -22,11 +22,19 @@ from telegram.ext import (
 )
 
 from bot import db
+from bot.arena import (
+    cmd_cricket,
+    cmd_rps,
+    on_arena_callback,
+    purge_old_results_loop,
+    sweep_idle_matches_loop,
+)
 from bot.calc import on_calc
 from bot.commands import add_cmd, cmd, cmd_name
 from bot.config import BOT_TOKEN
 from bot.flood import cmd_flood, cmd_floodmute, on_flood
 from bot.fun import cmd_scold
+from bot.leaderboard import cmd_lb, on_lb_callback
 from bot.handlers import (
     cmd_addowner,
     cmd_allowpack,
@@ -136,6 +144,9 @@ _MEMBER_COMMANDS = [
     ("stats", "Your status in this group"),
     ("notag", "Skip group pings"),
     ("tagme", "Include me in pings"),
+    ("cricket", "Challenge someone to hand cricket"),
+    ("rps", "Challenge someone to rock-paper-scissors"),
+    ("lb", "Games leaderboard"),
 ]
 _STAFF_COMMANDS = _MEMBER_COMMANDS + [
     ("welcome", "Set the join message"),
@@ -180,10 +191,17 @@ async def on_startup(app: Application) -> None:
     await schedule_pending_jobs(app)
     app.bot_data["zombies_task"] = asyncio.create_task(daily_zombies_loop(app))
     app.bot_data["release_task"] = asyncio.create_task(maybe_broadcast_on_startup(app))
+    app.bot_data["arena_sweep_task"] = asyncio.create_task(sweep_idle_matches_loop(app))
+    app.bot_data["arena_purge_task"] = asyncio.create_task(purge_old_results_loop(app))
 
 
 async def on_shutdown(app: Application) -> None:
-    for key in ("zombies_task", "release_task"):
+    for key in (
+        "zombies_task",
+        "release_task",
+        "arena_sweep_task",
+        "arena_purge_task",
+    ):
         task = app.bot_data.get(key)
         if task:
             task.cancel()
@@ -217,6 +235,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_tagall_callback, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_packs_callback, pattern=r"^pk:"))
     app.add_handler(CallbackQueryHandler(on_verify_callback, pattern=r"^vf:"))
+    app.add_handler(CallbackQueryHandler(on_arena_callback, pattern=r"^g:"))
+    app.add_handler(CallbackQueryHandler(on_lb_callback, pattern=r"^lb:"))
     add_cmd(app, "whisper", cmd_whisper)
     add_cmd(app, "lock", cmd_lock)
     add_cmd(app, "unlock", cmd_unlock)
@@ -292,6 +312,9 @@ def main() -> None:
     add_cmd(app, "filters", cmd_filters)
     add_cmd(app, ["blacklist", "bl"], cmd_blacklist)
     add_cmd(app, ["unblacklist", "unbl"], cmd_unblacklist)
+    add_cmd(app, "cricket", cmd_cricket)
+    add_cmd(app, ["rps", "rockpaperscissors"], cmd_rps)
+    add_cmd(app, "lb", cmd_lb)
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_members))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left_service))

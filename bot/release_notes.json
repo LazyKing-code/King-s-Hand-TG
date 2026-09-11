@@ -94,5 +94,41 @@
         "/makeadmin can now promote a bot the same way it promotes a person - reply to it or tag it. It still only touches admins it promoted itself."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.3",
+    "date": "11 September 2026",
+    "headline": "Admin roles for makeadmin",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Choose what a new admin can do",
+        "/makeadmin @username now takes an optional role: helper (delete + pin only), mod (adds mute/ban/kick, invite, video chats - this is the default), or admin (adds group settings + info). Previously every admin it made was missing mute/ban/kick rights in Telegram itself, even though the bot's own /mute, /ban, and /kick commands still worked for them - roles fix the native Telegram side too. It still never lets an admin it made add or remove other admins."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.4",
+    "date": "11 September 2026",
+    "headline": "Cricket, rock-paper-scissors, and a leaderboard are back",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Hand cricket",
+        "/cricket @username - one over each, text and buttons only, no images. Both pick 1-6 every ball; matching numbers means the batter is out. Highest total after both innings wins, and the chase ends the moment the target is passed."
+      ],
+      [
+        "Rock-paper-scissors",
+        "/rps @username - one round, pick your move and it resolves instantly."
+      ],
+      [
+        "Leaderboard",
+        "/lb shows wins/losses/draws for the last 3 days. /lb cricket or /lb rps shows match history with times, 5 per page - only 3 days of history is kept."
+      ],
+      [
+        "Rules to keep it clean",
+        "At most 3 matches of the same game run at once per group. An unaccepted challenge closes itself after 3 minutes; a match with no move for 5 minutes closes with no result recorded, so nothing sits open for days."
+      ]
+    ]
   }
 ]
