@@ -74,6 +74,12 @@ def init() -> None:
                 user_id INTEGER NOT NULL,
                 PRIMARY KEY (chat_id, user_id)
             );
+            CREATE TABLE IF NOT EXISTS admin_roles (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                PRIMARY KEY (chat_id, user_id)
+            );
             CREATE TABLE IF NOT EXISTS chat_settings (
                 chat_id INTEGER PRIMARY KEY,
                 placeholder_file_id TEXT,
@@ -650,6 +656,32 @@ def set_extra_owner(chat_id: int, user_id: int, owner: bool) -> None:
 
 def list_extra_owners(chat_id: int) -> list[int]:
     return list_ids("extra_owners", chat_id)
+
+
+def get_admin_role(chat_id: int, user_id: int) -> str | None:
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT role FROM admin_roles WHERE chat_id=? AND user_id=?",
+            (chat_id, user_id),
+        ).fetchone()
+        return str(row["role"]) if row else None
+
+
+def set_admin_role(chat_id: int, user_id: int, role: str) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "INSERT INTO admin_roles(chat_id, user_id, role) VALUES (?, ?, ?) "
+            "ON CONFLICT(chat_id, user_id) DO UPDATE SET role=excluded.role",
+            (chat_id, user_id, role),
+        )
+
+
+def clear_admin_role(chat_id: int, user_id: int) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "DELETE FROM admin_roles WHERE chat_id=? AND user_id=?",
+            (chat_id, user_id),
+        )
 
 
 def get_placeholder(chat_id: int) -> str | None:

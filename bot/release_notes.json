@@ -250,5 +250,17 @@
         "The daily zombie scan now runs exactly once per day at 9:00 AM IST, no matter when the bot is deployed or restarted. Previously, if you restarted the bot multiple times in a day, you'd see duplicate scan messages. Now the bot tracks the last scan date for each group and won't send duplicate messages on the same day. This ensures clean, predictable daily reports without spam."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.12",
+    "date": "11 September 2026",
+    "headline": "Fixed /strikes role display",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Admin Role Bug",
+        "/strikes was wrongly labeling Telegram admins and mods as 'member'. A missing database helper crashed while reading their role, and the error was swallowed so their admin permissions never showed either. That is fixed - real admins/mods now show the correct role (helper/mod/admin when detectable) plus their actual permission checkmarks."
+      ]
+    ]
   }
 ]

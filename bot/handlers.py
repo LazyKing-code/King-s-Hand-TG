@@ -23,6 +23,7 @@ from bot.moderation import (
     demote_all_admins,
     format_user,
     forwarded_chat,
+    infer_admin_role,
     is_group_admin,
     is_immune,
     is_owner,
@@ -767,7 +768,7 @@ async def cmd_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     trusted = is_immune(target.id, chat_id)
     db_trusted = db.is_trusted(chat_id, target.id)
     
-    # Get role and ALL permissions
+    # Get role and ALL permissions from Telegram (don't let DB lookups break this)
     role = "member"
     is_owner = False
     is_admin = False
@@ -794,17 +795,24 @@ async def cmd_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         member = await context.bot.get_chat_member(chat_id, target.id)
         
-        # Determine role
+        # Determine role from Telegram status first
         if member.status == "creator":
             role = "👑 owner"
             is_owner = True
             is_admin = True
         elif member.status == "administrator":
             is_admin = True
-            # Check if promoted by bot
-            bot_role = db.get_admin_role(chat_id, target.id)
-            if bot_role:
+            bot_role = None
+            try:
+                bot_role = db.get_admin_role(chat_id, target.id)
+            except Exception:
+                bot_role = None
+            if not bot_role:
+                bot_role = infer_admin_role(member)
+            if bot_role and getattr(member, "can_be_edited", False):
                 role = f"🛡️ {bot_role} (via bot)"
+            elif bot_role:
+                role = f"🛡️ {bot_role} (Telegram)"
             else:
                 role = "⚔️ admin (Telegram)"
         elif member.status == "restricted":
@@ -859,7 +867,7 @@ async def cmd_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             perms["post_messages"] = False
             perms["edit_messages"] = False
     except Exception:
-        pass
+        log.exception("strikes: failed to fetch chat member for %s", target.id)
     
     # Build message
     lines = [
@@ -913,6 +921,7 @@ async def cmd_makeadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     role = parse_admin_role(context.args or [])
     try:
         await promote_limited(context, update.effective_chat, target.id, role=role)
+        db.set_admin_role(update.effective_chat.id, target.id, role)
         db.reset_strikes(update.effective_chat.id, target.id)
         await update.effective_message.reply_html(
             f"{mention(target)} is now admin via this bot — role: <b>{role}</b>.\n"

@@ -325,6 +325,32 @@ def role_description(role: str) -> str:
     return _ROLE_DESCRIPTIONS.get(role, _ROLE_DESCRIPTIONS[DEFAULT_ADMIN_ROLE])
 
 
+def infer_admin_role(member) -> str | None:
+    """Guess helper/mod/admin from Telegram rights when we have no stored role."""
+    if getattr(member, "status", None) not in (ChatMember.ADMINISTRATOR, "administrator"):
+        return None
+    has = {
+        name: bool(getattr(member, name, False))
+        for name in (
+            "can_manage_chat",
+            "can_delete_messages",
+            "can_restrict_members",
+            "can_invite_users",
+            "can_pin_messages",
+            "can_manage_video_chats",
+            "can_change_info",
+        )
+    }
+    # Match from most to least privileged.
+    for role in ("admin", "mod", "helper"):
+        wanted = _ROLE_RIGHTS[role]
+        if all(has.get(name, False) for name in wanted):
+            return role
+    if any(has.values()):
+        return "admin"  # custom rights — still an admin
+    return "admin"
+
+
 def _admin_rights_kwargs(bot_member, chat, *, grant: bool, role: str = DEFAULT_ADMIN_ROLE) -> dict:
     """Only set rights Telegram allows this bot to grant, filtered to what the
     chosen role wants. Skip forum-only flags on normal groups — passing
@@ -431,6 +457,7 @@ async def demote(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int)
         if target.status == ChatMember.OWNER:
             return False
         if target.status != ChatMember.ADMINISTRATOR:
+            db.clear_admin_role(chat_id, user_id)
             return True
         if not getattr(target, "can_be_edited", False):
             log.warning(
@@ -450,7 +477,10 @@ async def demote(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int)
                 **_admin_rights_kwargs(me, chat, grant=False),
             )
         after = await context.bot.get_chat_member(chat_id, user_id)
-        return after.status != ChatMember.ADMINISTRATOR
+        ok = after.status != ChatMember.ADMINISTRATOR
+        if ok:
+            db.clear_admin_role(chat_id, user_id)
+        return ok
     except Exception:
         log.exception("Failed to demote %s", user_id)
         return False
