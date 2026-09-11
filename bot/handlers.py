@@ -767,10 +767,29 @@ async def cmd_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     trusted = is_immune(target.id, chat_id)
     db_trusted = db.is_trusted(chat_id, target.id)
     
-    # Get role and permissions
+    # Get role and ALL permissions
     role = "member"
-    can_do = []
-    cannot_do = []
+    is_owner = False
+    is_admin = False
+    
+    # Default permissions for regular members
+    perms = {
+        "send_messages": True,
+        "send_media": True,
+        "send_stickers": True,
+        "send_polls": True,
+        "add_web_previews": True,
+        "manage_chat": False,
+        "delete_messages": False,
+        "restrict_members": False,
+        "promote_members": False,
+        "manage_video_chats": False,
+        "invite_users": False,
+        "pin_messages": False,
+        "change_info": False,
+        "post_messages": False,
+        "edit_messages": False,
+    }
     
     try:
         member = await context.bot.get_chat_member(chat_id, target.id)
@@ -778,63 +797,67 @@ async def cmd_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # Determine role
         if member.status == "creator":
             role = "👑 owner"
+            is_owner = True
+            is_admin = True
         elif member.status == "administrator":
+            is_admin = True
             # Check if promoted by bot
             bot_role = db.get_admin_role(chat_id, target.id)
             if bot_role:
                 role = f"🛡️ {bot_role} (via bot)"
             else:
                 role = "⚔️ admin (Telegram)"
+        elif member.status == "restricted":
+            role = "🔇 restricted"
+        elif member.status == "left":
+            role = "❌ left"
+        elif member.status == "kicked":
+            role = "⛔ banned"
         
-        # Check all permissions for admins
-        if member.status in ("administrator", "creator"):
-            # Manage chat
-            if member.status == "creator" or getattr(member, "can_manage_chat", False):
-                can_do.append("✅ Manage chat")
-            else:
-                cannot_do.append("❌ Manage chat")
-            
-            # Delete messages
-            if member.status == "creator" or getattr(member, "can_delete_messages", False):
-                can_do.append("✅ Delete messages")
-            else:
-                cannot_do.append("❌ Delete messages")
-            
-            # Kick/ban users
-            if member.status == "creator" or getattr(member, "can_restrict_members", False):
-                can_do.append("✅ Kick/ban users")
-            else:
-                cannot_do.append("❌ Kick/ban users")
-            
-            # Add admins
-            if member.status == "creator" or getattr(member, "can_promote_members", False):
-                can_do.append("✅ Add admins")
-            else:
-                cannot_do.append("❌ Add admins")
-            
-            # Manage voice chats
-            if member.status == "creator" or getattr(member, "can_manage_video_chats", False):
-                can_do.append("✅ Manage voice chats")
-            else:
-                cannot_do.append("❌ Manage voice chats")
-            
-            # Invite users
-            if member.status == "creator" or getattr(member, "can_invite_users", False):
-                can_do.append("✅ Invite users")
-            else:
-                cannot_do.append("❌ Invite users")
-            
-            # Pin messages
-            if member.status == "creator" or getattr(member, "can_pin_messages", False):
-                can_do.append("✅ Pin messages")
-            else:
-                cannot_do.append("❌ Pin messages")
-            
-            # Change group info
-            if member.status == "creator" or getattr(member, "can_change_info", False):
-                can_do.append("✅ Change group info")
-            else:
-                cannot_do.append("❌ Change group info")
+        # Get permissions
+        if is_owner:
+            # Owner has all permissions
+            perms = {k: True for k in perms}
+        elif is_admin:
+            # Admin permissions
+            perms["manage_chat"] = getattr(member, "can_manage_chat", False)
+            perms["delete_messages"] = getattr(member, "can_delete_messages", False)
+            perms["restrict_members"] = getattr(member, "can_restrict_members", False)
+            perms["promote_members"] = getattr(member, "can_promote_members", False)
+            perms["manage_video_chats"] = getattr(member, "can_manage_video_chats", False)
+            perms["invite_users"] = getattr(member, "can_invite_users", False)
+            perms["pin_messages"] = getattr(member, "can_pin_messages", False)
+            perms["change_info"] = getattr(member, "can_change_info", False)
+            perms["post_messages"] = getattr(member, "can_post_messages", False)
+            perms["edit_messages"] = getattr(member, "can_edit_messages", False)
+            # Admins can send everything
+            perms["send_messages"] = True
+            perms["send_media"] = True
+            perms["send_stickers"] = True
+            perms["send_polls"] = True
+            perms["add_web_previews"] = True
+        else:
+            # Regular member or restricted - check permissions
+            if member.status == "restricted":
+                # Get restricted permissions
+                member_perms = getattr(member, "permissions", None)
+                if member_perms:
+                    perms["send_messages"] = getattr(member_perms, "can_send_messages", False)
+                    perms["send_media"] = getattr(member_perms, "can_send_media_messages", False) or getattr(member_perms, "can_send_photos", False)
+                    perms["send_stickers"] = getattr(member_perms, "can_send_other_messages", False)
+                    perms["send_polls"] = getattr(member_perms, "can_send_polls", False)
+                    perms["add_web_previews"] = getattr(member_perms, "can_add_web_page_previews", False)
+            # Non-admins never have admin permissions
+            perms["manage_chat"] = False
+            perms["delete_messages"] = False
+            perms["restrict_members"] = False
+            perms["promote_members"] = False
+            perms["manage_video_chats"] = False
+            perms["invite_users"] = False
+            perms["pin_messages"] = False
+            perms["change_info"] = False
+            perms["post_messages"] = False
+            perms["edit_messages"] = False
     except Exception:
         pass
     
@@ -849,21 +872,26 @@ async def cmd_strikes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"Approved: {'Yes' if approved else 'No'}",
         f"Trusted: {'Yes' if db_trusted else 'No'}",
         f"Immune: {'Yes' if trusted else 'No'}",
+        "",
+        "<b>━━━ PERMISSIONS ━━━</b>",
+        "",
+        "<b>Admin Permissions:</b>",
+        f"{'✅' if perms['manage_chat'] else '❌'} Manage chat",
+        f"{'✅' if perms['delete_messages'] else '❌'} Delete messages",
+        f"{'✅' if perms['restrict_members'] else '❌'} Kick/ban users",
+        f"{'✅' if perms['promote_members'] else '❌'} Add admins",
+        f"{'✅' if perms['manage_video_chats'] else '❌'} Manage voice chats",
+        f"{'✅' if perms['pin_messages'] else '❌'} Pin messages",
+        f"{'✅' if perms['invite_users'] else '❌'} Invite users via link",
+        f"{'✅' if perms['change_info'] else '❌'} Change group info",
+        "",
+        "<b>Member Permissions:</b>",
+        f"{'✅' if perms['send_messages'] else '❌'} Send messages",
+        f"{'✅' if perms['send_media'] else '❌'} Send media (photos/videos)",
+        f"{'✅' if perms['send_stickers'] else '❌'} Send stickers/GIFs",
+        f"{'✅' if perms['send_polls'] else '❌'} Send polls",
+        f"{'✅' if perms['add_web_previews'] else '❌'} Add web page previews",
     ]
-    
-    if can_do or cannot_do:
-        lines.append("")
-        lines.append("<b>━━━ PERMISSIONS ━━━</b>")
-        
-        if can_do:
-            lines.append("")
-            lines.append("<b>✅ Can Do:</b>")
-            lines.extend(can_do)
-        
-        if cannot_do:
-            lines.append("")
-            lines.append("<b>❌ Cannot Do:</b>")
-            lines.extend(cannot_do)
     
     await update.effective_message.reply_html("\n".join(lines))
 

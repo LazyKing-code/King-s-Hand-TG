@@ -234,8 +234,20 @@
     "intro": "Only what changed is listed below.",
     "sections": [
       [
-        "Permissions Display",
-        "The /strikes command now shows much more information. When you check someone's strikes, you'll see their role (owner, admin via bot, admin via Telegram, or member), their current status (warnings, approved, trusted, immune), and if they're an admin, a complete permissions breakdown. The permissions are split into two clear sections: '✅ Can Do' shows what they're allowed to do (manage chat, delete messages, kick/ban users, add admins, manage voice chats, invite users, pin messages, change group info), and '❌ Cannot Do' shows what they're restricted from. This makes it crystal clear exactly what someone can and cannot do in your group at a glance."
+        "Complete Permissions Display",
+        "The /strikes command now shows EVERY permission for EVERYONE - not just admins. When you check anyone's strikes, you'll see their role (owner, admin via bot, admin via Telegram, restricted, member), their current status (warnings, approved, trusted, immune), and a complete permissions breakdown. The display is split into Admin Permissions (manage chat, delete messages, kick/ban users, add admins, manage voice chats, pin messages, invite users, change group info) and Member Permissions (send messages, send media, send stickers, send polls, add web previews). Every single permission shows as either ✅ Yes or ❌ No, so you can instantly see exactly what anyone can and cannot do in your group, whether they're an owner, admin, or regular member."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.11",
+    "date": "11 September 2026",
+    "headline": "Daily zombie scan scheduling fix",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Scheduled Daily Scans",
+        "The daily zombie scan now runs exactly once per day at 9:00 AM IST, no matter when the bot is deployed or restarted. Previously, if you restarted the bot multiple times in a day, you'd see duplicate scan messages. Now the bot tracks the last scan date for each group and won't send duplicate messages on the same day. This ensures clean, predictable daily reports without spam."
       ]
     ]
   }

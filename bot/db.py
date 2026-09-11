@@ -937,6 +937,17 @@ def set_zombies_daily(chat_id: int, enabled: bool) -> None:
     _set_setting(chat_id, "zombies_daily", int(enabled))
 
 
+def get_last_zombie_scan_date(chat_id: int) -> str:
+    """Get the date of the last zombie scan message (YYYY-MM-DD format)."""
+    raw = _get_setting(chat_id, "last_zombie_scan_date")
+    return raw or ""
+
+
+def set_last_zombie_scan_date(chat_id: int, date_str: str) -> None:
+    """Set the date of the last zombie scan message (YYYY-MM-DD format)."""
+    _set_setting(chat_id, "last_zombie_scan_date", date_str)
+
+
 def is_tagall_optout(chat_id: int, user_id: int) -> bool:
     with cursor() as conn:
         row = conn.execute(

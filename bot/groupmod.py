@@ -571,11 +571,31 @@ async def kick_dead_accounts(bot, chat_id: int, ids: list[int]) -> int:
 
 
 async def run_daily_zombies(application) -> None:
+    import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        IST = ZoneInfo("Asia/Kolkata")
+    except Exception:
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    
+    today = datetime.datetime.now(IST).strftime("%Y-%m-%d")
     bot = application.bot
+    
     for chat_id in db.list_known_chat_ids():
         if not db.zombies_daily(chat_id):
             continue
+        
+        # Check if we already sent a message today
+        last_scan = db.get_last_zombie_scan_date(chat_id)
+        if last_scan == today:
+            log.info("daily zombies chat=%s already scanned today (%s), skipping", chat_id, today)
+            continue
+        
         found, scanned = await find_dead_accounts(bot, chat_id)
+        
+        # Mark that we scanned today BEFORE sending message, to prevent duplicates on errors
+        db.set_last_zombie_scan_date(chat_id, today)
+        
         if not found:
             log.info("daily zombies chat=%s scanned=%s none", chat_id, scanned)
             # Send "no zombies found" message to group
@@ -587,6 +607,7 @@ async def run_daily_zombies(application) -> None:
             except Exception as exc:
                 log.warning("could not send daily zombie message to chat %s: %s", chat_id, exc)
             continue
+        
         # Found zombies - ask for confirmation instead of auto-kicking
         log.info("daily zombies chat=%s found=%s scanned=%s", chat_id, len(found), scanned)
         try:
@@ -600,13 +621,43 @@ async def run_daily_zombies(application) -> None:
 
 
 async def daily_zombies_loop(application) -> None:
+    """Run daily zombie scan at 9:00 AM IST every day."""
+    import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        IST = ZoneInfo("Asia/Kolkata")
+    except Exception:
+        # Fallback for systems without zoneinfo
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    
+    # Wait a bit on startup
     await asyncio.sleep(120)
+    
     while True:
         try:
+            # Calculate time until next 9 AM IST
+            now = datetime.datetime.now(IST)
+            target = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            
+            # If it's already past 9 AM today, target tomorrow
+            if now >= target:
+                target += datetime.timedelta(days=1)
+            
+            # Calculate seconds to wait
+            wait_seconds = (target - now).total_seconds()
+            
+            log.info(f"Next zombie scan scheduled for {target.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            
+            # Wait until 9 AM
+            await asyncio.sleep(wait_seconds)
+            
+            # Run the scan
             await run_daily_zombies(application)
+            
         except Exception:
-            log.exception("daily zombies run failed")
-        await asyncio.sleep(24 * 3600)
+            log.exception("daily zombies loop failed")
+            # If something goes wrong, wait 1 hour and try again
+            await asyncio.sleep(3600)
 
 
 async def cmd_zombies(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
