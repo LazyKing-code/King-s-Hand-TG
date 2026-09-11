@@ -370,5 +370,29 @@
         "Wikipedia is removed from /ask. It now uses India-focused web search (DuckDuckGo region in-en) and posts the snippets it finds, so slang and local questions are less likely to get weird encyclopedia matches."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.21",
+    "date": "11 September 2026",
+    "headline": "/ask rate-limit fix",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "/ask Reliability",
+        "Empty /ask replies were not a Telegram rule problem - DuckDuckGo was rate-limiting the bot's cloud IP. /ask now detects that and says so, tries Brave Search if you set BRAVE_API_KEY in .env (best for India results on Railway), and only then falls back so factual questions still get an answer instead of Search came back empty."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.22",
+    "date": "11 September 2026",
+    "headline": "/ask works without any API key",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "/ask Free Lookup",
+        "You do not need a Brave or other API key. /ask now uses free sources that work from the server first, so normal questions get answers even when DuckDuckGo is rate-limiting the cloud IP. An API key stays optional only if you ever want extra web results."
+      ]
+    ]
   }
 ]

@@ -100,7 +100,7 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/unlock` | Restore permissions |
 | `/flood on` | Anti-flood (`/flood 6 4`, `/floodmute 10m`) |
 | `/scold` | Funny scolding (reply or @username); new line each time |
-| `/ask [question]` | Ask anything — India-focused web search (no Wikipedia) |
+| `/ask [question]` | Ask anything — free lookup (no API key needed) |
 | `/tag` | Set a member tag; `/tag null` clears it |
 | `/cricket @user` | Hand cricket. Accept first, then challenger picks 1–3 overs. Matching picks = out |
 | `/rps @user` | One round of rock-paper-scissors |

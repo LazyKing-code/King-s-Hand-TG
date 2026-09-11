@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 
 from telegram import Update, User
 from telegram.ext import ContextTypes
 
 from bot.commands import cmd
+from bot.config import BRAVE_API_KEY
 from bot.moderation import mention, require_group, resolve_target
 
 log = logging.getLogger(__name__)
@@ -49,6 +51,8 @@ _bags: dict[int, list[int]] = {}
 
 # Prefer India English results for this group's audience.
 _ASK_REGION = "in-en"
+# Skip DuckDuckGo for a while after a rate-limit hit (cloud hosts get blocked often).
+_ddg_cooldown_until = 0.0
 
 
 def _next_scold(chat_id: int) -> str:
@@ -83,7 +87,7 @@ async def cmd_scold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Answer questions via India-focused web search (no Wikipedia)."""
+    """Answer via India web search. Not limited by Telegram — search engines rate-limit cloud IPs."""
     msg = update.effective_message
     if not context.args:
         await msg.reply_text(
@@ -99,15 +103,22 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        answer = await _gather_answer(question)
+        answer, status = await _gather_answer(question)
         if answer:
             if len(answer) > 3500:
                 answer = answer[:3490].rstrip() + "…"
             await status_msg.edit_text(answer)
-        else:
+            return
+        if status == "ratelimited":
             await status_msg.edit_text(
-                "Search came back empty. Try again in a bit, or make the question a bit clearer."
+                "Search is temporarily rate-limited (the web provider blocks the "
+                "server IP for a bit — this is not a Telegram rule).\n"
+                "Try again in 1–2 minutes."
             )
+            return
+        await status_msg.edit_text(
+            "Couldn't find anything useful for that. Try a clearer question."
+        )
     except Exception:
         log.exception("ask failed")
         try:
@@ -118,20 +129,70 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
 
 
-async def _gather_answer(question: str) -> str | None:
-    """Web search only (India region). Return whatever useful text we get."""
-    candidates: list[str] = []
-    for getter in (_answer_from_web, _answer_from_ddg_instant):
-        try:
-            hit = await getter(question)
-        except Exception as exc:
-            log.warning("ask source %s failed: %s", getter.__name__, exc)
-            hit = None
+async def _gather_answer(question: str) -> tuple[str | None, str]:
+    """Returns (answer, status) where status is ok|empty|ratelimited.
+
+    No API key required. Order favors free sources that work from cloud hosts
+    (DuckDuckGo HTML scrape is often rate-limited on Railway).
+    """
+    rate_limited = False
+
+    # Optional paid/free-tier key — only if the owner set one.
+    if BRAVE_API_KEY:
+        hit = await _answer_from_brave(question)
         if hit:
-            candidates.append(hit)
-            if len(hit) >= 60:
-                return hit
-    return max(candidates, key=len) if candidates else None
+            return hit, "ok"
+
+    # Free + reliable on most hosts (including Railway).
+    hit = await _answer_from_wikipedia(question)
+    if hit:
+        return hit, "ok"
+
+    # Free Instant Answer JSON (often still works when DDG HTML is blocked).
+    hit = await _answer_from_ddg_instant(question)
+    if hit:
+        return hit, "ok"
+
+    # Full web scrape — best when it works, often rate-limited on cloud IPs.
+    hit, ddg_limited = await _answer_from_web(question)
+    if hit:
+        return hit, "ok"
+    rate_limited = rate_limited or ddg_limited
+
+    return None, ("ratelimited" if rate_limited else "empty")
+
+
+def _query_variants(question: str) -> list[str]:
+    """Build a few search phrasings so free encyclopedias hit better titles."""
+    raw = " ".join(question.strip().split())
+    variants = [raw]
+    cleaned = raw
+    for ch in "?!.,;:\"'":
+        cleaned = cleaned.replace(ch, " ")
+    cleaned = " ".join(cleaned.split())
+    if cleaned and cleaned.lower() != raw.lower():
+        variants.append(cleaned)
+
+    stop = {
+        "a", "an", "the", "is", "are", "was", "were", "do", "does", "did",
+        "who", "what", "when", "where", "why", "how", "which", "whom",
+        "me", "my", "i", "we", "you", "please", "tell", "about",
+        "kya", "hai", "hain", "ho", "hu", "hun", "mai", "main", "kaun", "kon",
+    }
+    tokens = [t for t in cleaned.split() if t.lower() not in stop]
+    if tokens:
+        short = " ".join(tokens)
+        if short.lower() not in {v.lower() for v in variants}:
+            variants.append(short)
+    # Dedupe preserving order
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in variants:
+        key = v.lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(v)
+    return out[:4]
 
 
 def _clean_text(text: str, max_chars: int = 900) -> str:
@@ -160,30 +221,84 @@ def _shorten(text: str, max_sentences: int = 3) -> str:
     return out
 
 
+def _mark_ddg_limited() -> None:
+    global _ddg_cooldown_until
+    _ddg_cooldown_until = time.time() + 90
+
+
+def _ddg_is_cooling() -> bool:
+    return time.time() < _ddg_cooldown_until
+
+
+async def _answer_from_brave(question: str) -> str | None:
+    """Brave Search API with India country bias. Needs BRAVE_API_KEY."""
+    try:
+        import requests
+    except ImportError:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params={
+                "q": question,
+                "country": "IN",
+                "search_lang": "en",
+                "count": 5,
+                "text_decorations": 0,
+                "spellcheck": 1,
+            },
+            headers={
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip",
+                "X-Subscription-Token": BRAVE_API_KEY,
+            },
+            timeout=12,
+        )
+        if resp.status_code == 429:
+            log.warning("Brave search rate-limited")
+            return None
+        if not resp.ok:
+            log.warning("Brave search HTTP %s: %s", resp.status_code, resp.text[:200])
+            return None
+        data = resp.json()
+        snippets: list[str] = []
+        for item in (data.get("web") or {}).get("results") or []:
+            title = (item.get("title") or "").strip()
+            body = (item.get("description") or "").strip()
+            chunk = _clean_text(f"{title}. {body}" if title and body else (body or title))
+            if chunk:
+                snippets.append(chunk)
+        if not snippets:
+            return None
+        return "\n\n".join(_shorten(s, 2) for s in snippets[:3])
+    except Exception as exc:
+        log.warning("Brave search failed: %s", exc)
+        return None
+
+
 async def _answer_from_ddg_instant(question: str) -> str | None:
     """DuckDuckGo Instant Answer with India locale."""
+    if _ddg_is_cooling():
+        return None
     try:
-        import json
-        import urllib.parse
-        import urllib.request
+        import requests
 
-        params = urllib.parse.urlencode(
-            {
+        resp = requests.get(
+            "https://api.duckduckgo.com/",
+            params={
                 "q": question,
                 "format": "json",
                 "no_html": 1,
                 "skip_disambig": 1,
                 "kl": _ASK_REGION,
-            }
-        )
-        url = f"https://api.duckduckgo.com/?{params}"
-        req = urllib.request.Request(
-            url,
+            },
             headers={"User-Agent": "KingsHandBot/1.0 (Telegram; /ask)"},
+            timeout=10,
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
-
+        if resp.status_code == 429:
+            _mark_ddg_limited()
+            return None
+        data = resp.json()
         bits: list[str] = []
         heading = (data.get("Heading") or "").strip()
         for key in ("Answer", "AbstractText", "Definition"):
@@ -204,7 +319,6 @@ async def _answer_from_ddg_instant(question: str) -> str | None:
                             bits.append(text)
                 if len(bits) >= 3:
                     break
-
         if not bits:
             return None
         body = _shorten(" ".join(bits[:3]), 3)
@@ -216,15 +330,19 @@ async def _answer_from_ddg_instant(question: str) -> str | None:
         return None
 
 
-async def _answer_from_web(question: str) -> str | None:
-    """India-region DuckDuckGo text/news search — return whatever snippets we get."""
+async def _answer_from_web(question: str) -> tuple[str | None, bool]:
+    """India-region DuckDuckGo text/news. Returns (answer, was_rate_limited)."""
+    if _ddg_is_cooling():
+        return None, True
     try:
         from duckduckgo_search import DDGS
+        from duckduckgo_search.exceptions import DuckDuckGoSearchException
     except ImportError:
         log.warning("duckduckgo-search package not installed")
-        return None
+        return None, False
 
     snippets: list[str] = []
+    limited = False
     try:
         with DDGS() as ddgs:
             for backend in ("auto", "lite", "html"):
@@ -239,10 +357,26 @@ async def _answer_from_web(question: str) -> str | None:
                         )
                     )
                 except TypeError:
-                    results = list(
-                        ddgs.text(question, region=_ASK_REGION, max_results=5)
-                    )
+                    try:
+                        results = list(
+                            ddgs.text(question, region=_ASK_REGION, max_results=5)
+                        )
+                    except Exception as exc:
+                        if "ratelimit" in str(exc).lower() or "202" in str(exc):
+                            limited = True
+                            _mark_ddg_limited()
+                        log.warning("DDG text failed: %s", exc)
+                        continue
+                except DuckDuckGoSearchException as exc:
+                    if "ratelimit" in str(exc).lower() or "202" in str(exc):
+                        limited = True
+                        _mark_ddg_limited()
+                    log.warning("DDG text backend %s failed: %s", backend, exc)
+                    continue
                 except Exception as exc:
+                    if "ratelimit" in str(exc).lower() or "202" in str(exc):
+                        limited = True
+                        _mark_ddg_limited()
                     log.warning("DDG text backend %s failed: %s", backend, exc)
                     continue
                 for item in results or []:
@@ -256,11 +390,9 @@ async def _answer_from_web(question: str) -> str | None:
                 if snippets:
                     break
 
-            if not snippets:
+            if not snippets and not limited:
                 try:
-                    news = list(
-                        ddgs.news(question, region=_ASK_REGION, max_results=3)
-                    )
+                    news = list(ddgs.news(question, region=_ASK_REGION, max_results=3))
                 except TypeError:
                     try:
                         news = list(ddgs.news(question, max_results=3))
@@ -268,6 +400,9 @@ async def _answer_from_web(question: str) -> str | None:
                         log.warning("DDG news failed: %s", exc)
                         news = []
                 except Exception as exc:
+                    if "ratelimit" in str(exc).lower() or "202" in str(exc):
+                        limited = True
+                        _mark_ddg_limited()
                     log.warning("DDG news failed: %s", exc)
                     news = []
                 for item in news or []:
@@ -279,8 +414,145 @@ async def _answer_from_web(question: str) -> str | None:
                     if chunk:
                         snippets.append(chunk)
     except Exception as exc:
+        if "ratelimit" in str(exc).lower() or "202" in str(exc):
+            limited = True
+            _mark_ddg_limited()
         log.warning("Web search failed: %s", exc)
 
     if not snippets:
+        return None, limited
+    return "\n\n".join(_shorten(s, 2) for s in snippets[:3] if s) or None, limited
+
+
+def _title_score(title: str, question: str) -> int:
+    """Higher = better match between a result title and the user's question."""
+    q_tokens = {t.lower() for t in _query_variants(question)[-1].split() if len(t) > 2}
+    if not q_tokens:
+        return 0
+    t_tokens = {t.lower().strip("()[],") for t in title.split() if len(t) > 2}
+    return len(q_tokens & t_tokens)
+
+
+async def _answer_from_wikipedia(question: str) -> str | None:
+    """Free encyclopedia lookup — works without any API key on cloud hosts."""
+    hit = await _answer_from_wikipedia_package(question)
+    if hit:
+        return hit
+    return await _answer_from_mediawiki(question)
+
+
+async def _answer_from_wikipedia_package(question: str) -> str | None:
+    try:
+        import wikipedia
+        from wikipedia.exceptions import DisambiguationError, PageError
+    except ImportError:
         return None
-    return "\n\n".join(_shorten(s, 2) for s in snippets[:3] if s) or None
+    try:
+        wikipedia.set_lang("en")
+        try:
+            wikipedia.set_user_agent("KingsHandBot/1.0 (Telegram /ask)")
+        except Exception:
+            pass
+        for q in _query_variants(question):
+            results = wikipedia.search(q, results=8) or []
+            ranked = sorted(
+                results, key=lambda title: _title_score(title, question), reverse=True
+            )
+            for title in ranked:
+                if _title_score(title, question) == 0 and len(ranked) > 1:
+                    continue
+                try:
+                    summary = wikipedia.summary(title, sentences=3, auto_suggest=False)
+                except DisambiguationError as exc:
+                    options = [o for o in (exc.options or []) if o][:3]
+                    options = sorted(
+                        options, key=lambda t: _title_score(t, question), reverse=True
+                    )
+                    summary = None
+                    for opt in options:
+                        try:
+                            summary = wikipedia.summary(
+                                opt, sentences=3, auto_suggest=False
+                            )
+                            title = opt
+                            break
+                        except Exception:
+                            continue
+                    if not summary:
+                        continue
+                except PageError:
+                    continue
+                except Exception:
+                    continue
+                summary = _shorten(summary or "", 3)
+                if summary:
+                    if title.lower() not in summary.lower()[:80]:
+                        return f"{title}: {summary}"
+                    return summary
+        return None
+    except Exception as exc:
+        log.warning("Wikipedia package failed: %s", exc)
+        return None
+
+
+async def _answer_from_mediawiki(question: str) -> str | None:
+    """Direct MediaWiki opensearch + extract — no API key."""
+    try:
+        import requests
+    except ImportError:
+        return None
+
+    headers = {"User-Agent": "KingsHandBot/1.0 (Telegram /ask; free lookup)"}
+    try:
+        for q in _query_variants(question):
+            search = requests.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={
+                    "action": "opensearch",
+                    "search": q,
+                    "limit": 8,
+                    "namespace": 0,
+                    "format": "json",
+                },
+                headers=headers,
+                timeout=12,
+            )
+            if not search.ok:
+                continue
+            data = search.json()
+            titles = data[1] if isinstance(data, list) and len(data) > 1 else []
+            ranked = sorted(
+                titles, key=lambda title: _title_score(title, question), reverse=True
+            )
+            for title in ranked:
+                if _title_score(title, question) == 0 and len(ranked) > 1:
+                    continue
+                ext = requests.get(
+                    "https://en.wikipedia.org/w/api.php",
+                    params={
+                        "action": "query",
+                        "prop": "extracts",
+                        "exintro": 1,
+                        "explaintext": 1,
+                        "titles": title,
+                        "format": "json",
+                    },
+                    headers=headers,
+                    timeout=12,
+                )
+                if not ext.ok:
+                    continue
+                pages = (ext.json().get("query") or {}).get("pages") or {}
+                for page in pages.values():
+                    extract = (page.get("extract") or "").strip()
+                    if not extract:
+                        continue
+                    short = _shorten(extract, 3)
+                    if short:
+                        if title.lower() not in short.lower()[:80]:
+                            return f"{title}: {short}"
+                        return short
+        return None
+    except Exception as exc:
+        log.warning("MediaWiki API failed: %s", exc)
+        return None

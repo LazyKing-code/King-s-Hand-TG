@@ -31,6 +31,12 @@ OWNER_IDS = parse_id_list(os.getenv("OWNER_IDS", ""), os.getenv("OWNER_ID", ""))
 OWNER_ID = next(iter(sorted(OWNER_IDS)), 0)
 NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.55"))
 IMMUNE_IDS = parse_id_list(os.getenv("IMMUNE_IDS", "")) | set(OWNER_IDS)
+# Optional. Free tier at https://brave.com/search/api/ — makes /ask reliable from cloud hosts.
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "").strip()
+
+# Optional. Free Brave Search API key → more reliable /ask (India results).
+# https://brave.com/search/api/
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "").strip()
 
 # Optional. Leave empty for /kick /help. Set kh_ only if another bot already took those names.
 _raw_prefix = os.getenv("COMMAND_PREFIX", "").strip().lstrip("/")
