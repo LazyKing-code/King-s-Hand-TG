@@ -578,16 +578,25 @@ async def run_daily_zombies(application) -> None:
         found, scanned = await find_dead_accounts(bot, chat_id)
         if not found:
             log.info("daily zombies chat=%s scanned=%s none", chat_id, scanned)
+            # Send "no zombies found" message to group
+            try:
+                await bot.send_message(
+                    chat_id,
+                    f"Daily zombie scan: No deleted/deactivated accounts found (scanned {scanned} members)."
+                )
+            except Exception as exc:
+                log.warning("could not send daily zombie message to chat %s: %s", chat_id, exc)
             continue
-        kicked = await kick_dead_accounts(bot, chat_id, found)
-        log.info("daily zombies chat=%s removed=%s scanned=%s", chat_id, kicked, scanned)
-        if kicked:
-            await send_to_log(
-                SimpleNamespace(bot=bot),
+        # Found zombies - ask for confirmation instead of auto-kicking
+        log.info("daily zombies chat=%s found=%s scanned=%s", chat_id, len(found), scanned)
+        try:
+            await bot.send_message(
                 chat_id,
-                f"Daily cleanup removed {kicked} deleted/deactivated account(s).",
-                event="Zombies",
+                f"🧹 Daily zombie scan found {len(found)} deleted/deactivated account(s).\n\n"
+                f"Send {cmd('zombies')} confirm to kick them now, or ignore this message to skip."
             )
+        except Exception as exc:
+            log.warning("could not send daily zombie alert to chat %s: %s", chat_id, exc)
 
 
 async def daily_zombies_loop(application) -> None:

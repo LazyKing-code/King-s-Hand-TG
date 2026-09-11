@@ -193,6 +193,54 @@ def init() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_arena_results_chat_kind
                 ON arena_results(chat_id, kind, finished_at);
+            CREATE TABLE IF NOT EXISTS activity (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                daily_count INTEGER NOT NULL DEFAULT 0,
+                weekly_count INTEGER NOT NULL DEFAULT 0,
+                monthly_count INTEGER NOT NULL DEFAULT 0,
+                last_daily_reset INTEGER NOT NULL DEFAULT 0,
+                last_weekly_reset INTEGER NOT NULL DEFAULT 0,
+                last_monthly_reset INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (chat_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_activity_daily
+                ON activity(chat_id, daily_count DESC);
+            CREATE INDEX IF NOT EXISTS idx_activity_weekly
+                ON activity(chat_id, weekly_count DESC);
+            CREATE INDEX IF NOT EXISTS idx_activity_monthly
+                ON activity(chat_id, monthly_count DESC);
+            CREATE TABLE IF NOT EXISTS giveaways (
+                id TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                prize TEXT NOT NULL,
+                end_time REAL NOT NULL,
+                winner_count INTEGER NOT NULL DEFAULT 1,
+                min_messages INTEGER DEFAULT 0,
+                min_account_age_days INTEGER DEFAULT 0,
+                require_verified INTEGER DEFAULT 0,
+                participants TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'active',
+                message_id INTEGER,
+                created_by INTEGER NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_giveaways_chat
+                ON giveaways(chat_id, status);
+            CREATE INDEX IF NOT EXISTS idx_giveaways_end_time
+                ON giveaways(end_time);
+            CREATE TABLE IF NOT EXISTS giveaway_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                giveaway_id TEXT NOT NULL,
+                chat_id INTEGER NOT NULL,
+                prize TEXT NOT NULL,
+                winner_ids TEXT NOT NULL,
+                participant_count INTEGER NOT NULL,
+                drawn_at REAL NOT NULL,
+                reroll_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_giveaway_history_chat
+                ON giveaway_history(chat_id, drawn_at DESC);
             """
         )
         _ensure_column(conn, "chat_settings", "log_chat_id", "INTEGER")
@@ -1508,3 +1556,297 @@ def purge_arena_results(before: float) -> int:
     with cursor() as conn:
         cur = conn.execute("DELETE FROM arena_results WHERE finished_at < ?", (before,))
         return cur.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Activity tracking (message counting for leaderboards)
+# ---------------------------------------------------------------------------
+
+
+def increment_activity(chat_id: int, user_id: int) -> None:
+    """Increment all counters for a user's message. Auto-resets if period expired."""
+    now = time.time()
+    with cursor() as conn:
+        # Get or create the activity record
+        row = conn.execute(
+            "SELECT * FROM activity WHERE chat_id=? AND user_id=?",
+            (chat_id, user_id),
+        ).fetchone()
+        
+        if not row:
+            # New user
+            conn.execute(
+                """
+                INSERT INTO activity(
+                    chat_id, user_id, daily_count, weekly_count, monthly_count,
+                    last_daily_reset, last_weekly_reset, last_monthly_reset
+                ) VALUES (?, ?, 1, 1, 1, ?, ?, ?)
+                """,
+                (chat_id, user_id, now, now, now),
+            )
+            return
+        
+        # Check if we need to reset any counters
+        daily = int(row["daily_count"])
+        weekly = int(row["weekly_count"])
+        monthly = int(row["monthly_count"])
+        last_daily = float(row["last_daily_reset"])
+        last_weekly = float(row["last_weekly_reset"])
+        last_monthly = float(row["last_monthly_reset"])
+        
+        # Reset logic: if more than X seconds passed, reset
+        if now - last_daily > 86400:  # 24 hours
+            daily = 0
+            last_daily = now
+        if now - last_weekly > 7 * 86400:  # 7 days
+            weekly = 0
+            last_weekly = now
+        if now - last_monthly > 30 * 86400:  # 30 days
+            monthly = 0
+            last_monthly = now
+        
+        # Increment and update
+        conn.execute(
+            """
+            UPDATE activity
+            SET daily_count=?, weekly_count=?, monthly_count=?,
+                last_daily_reset=?, last_weekly_reset=?, last_monthly_reset=?
+            WHERE chat_id=? AND user_id=?
+            """,
+            (daily + 1, weekly + 1, monthly + 1, last_daily, last_weekly, last_monthly, chat_id, user_id),
+        )
+
+
+def get_activity_leaderboard(
+    chat_id: int,
+    period: str = "daily",
+    limit: int = 10,
+) -> list[dict]:
+    """Get top N users by message count for a period (daily/weekly/monthly)."""
+    column = f"{period}_count"
+    with cursor() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT user_id, {column} AS count
+            FROM activity
+            WHERE chat_id=? AND {column} > 0
+            ORDER BY {column} DESC
+            LIMIT ?
+            """,
+            (chat_id, limit),
+        ).fetchall()
+    return [{"user_id": int(r["user_id"]), "count": int(r["count"])} for r in rows]
+
+
+def get_user_activity(chat_id: int, user_id: int) -> dict:
+    """Get activity counts for a single user."""
+    with cursor() as conn:
+        row = conn.execute(
+            """
+            SELECT daily_count, weekly_count, monthly_count
+            FROM activity
+            WHERE chat_id=? AND user_id=?
+            """,
+            (chat_id, user_id),
+        ).fetchone()
+    if not row:
+        return {"daily": 0, "weekly": 0, "monthly": 0}
+    return {
+        "daily": int(row["daily_count"]),
+        "weekly": int(row["weekly_count"]),
+        "monthly": int(row["monthly_count"]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Giveaways
+# ---------------------------------------------------------------------------
+
+
+def create_giveaway(
+    giveaway_id: str,
+    chat_id: int,
+    prize: str,
+    end_time: float,
+    created_by: int,
+    *,
+    winner_count: int = 1,
+    min_messages: int = 0,
+    min_account_age_days: int = 0,
+    require_verified: bool = False,
+) -> None:
+    with cursor() as conn:
+        conn.execute(
+            """
+            INSERT INTO giveaways(
+                id, chat_id, prize, end_time, winner_count,
+                min_messages, min_account_age_days, require_verified,
+                participants, status, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', ?, ?)
+            """,
+            (
+                giveaway_id, chat_id, prize, end_time, winner_count,
+                min_messages, min_account_age_days, 1 if require_verified else 0,
+                created_by, time.time(),
+            ),
+        )
+
+
+def load_giveaway(giveaway_id: str) -> dict | None:
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT * FROM giveaways WHERE id=?", (giveaway_id,)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        participants = json.loads(row["participants"])
+    except (json.JSONDecodeError, TypeError):
+        participants = []
+    return {
+        "id": str(row["id"]),
+        "chat_id": int(row["chat_id"]),
+        "prize": str(row["prize"]),
+        "end_time": float(row["end_time"]),
+        "winner_count": int(row["winner_count"]),
+        "min_messages": int(row["min_messages"] or 0),
+        "min_account_age_days": int(row["min_account_age_days"] or 0),
+        "require_verified": bool(row["require_verified"]),
+        "participants": participants if isinstance(participants, list) else [],
+        "status": str(row["status"]),
+        "message_id": int(row["message_id"]) if row["message_id"] else None,
+        "created_by": int(row["created_by"]),
+        "created_at": float(row["created_at"]),
+    }
+
+
+def add_giveaway_participant(giveaway_id: str, user_id: int) -> bool:
+    """Add a participant. Returns True if added, False if already participating."""
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT participants FROM giveaways WHERE id=?", (giveaway_id,)
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            participants = json.loads(row["participants"])
+        except (json.JSONDecodeError, TypeError):
+            participants = []
+        if user_id in participants:
+            return False
+        participants.append(user_id)
+        conn.execute(
+            "UPDATE giveaways SET participants=? WHERE id=?",
+            (json.dumps(participants), giveaway_id),
+        )
+    return True
+
+
+def set_giveaway_message(giveaway_id: str, message_id: int) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE giveaways SET message_id=? WHERE id=?",
+            (message_id, giveaway_id),
+        )
+
+
+def cancel_giveaway(giveaway_id: str) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE giveaways SET status='cancelled' WHERE id=?",
+            (giveaway_id,),
+        )
+
+
+def list_active_giveaways(chat_id: int | None = None) -> list[dict]:
+    with cursor() as conn:
+        if chat_id:
+            rows = conn.execute(
+                "SELECT * FROM giveaways WHERE chat_id=? AND status='active' ORDER BY end_time",
+                (chat_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM giveaways WHERE status='active' ORDER BY end_time"
+            ).fetchall()
+    result = []
+    for row in rows:
+        try:
+            participants = json.loads(row["participants"])
+        except (json.JSONDecodeError, TypeError):
+            participants = []
+        result.append({
+            "id": str(row["id"]),
+            "chat_id": int(row["chat_id"]),
+            "prize": str(row["prize"]),
+            "end_time": float(row["end_time"]),
+            "winner_count": int(row["winner_count"]),
+            "min_messages": int(row["min_messages"] or 0),
+            "min_account_age_days": int(row["min_account_age_days"] or 0),
+            "require_verified": bool(row["require_verified"]),
+            "participants": participants if isinstance(participants, list) else [],
+            "status": str(row["status"]),
+            "message_id": int(row["message_id"]) if row["message_id"] else None,
+            "created_by": int(row["created_by"]),
+            "created_at": float(row["created_at"]),
+        })
+    return result
+
+
+def finish_giveaway(
+    giveaway_id: str,
+    winner_ids: list[int],
+    reroll_count: int = 0,
+) -> None:
+    giveaway = load_giveaway(giveaway_id)
+    if not giveaway:
+        return
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE giveaways SET status='finished' WHERE id=?",
+            (giveaway_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO giveaway_history(
+                giveaway_id, chat_id, prize, winner_ids, participant_count, drawn_at, reroll_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                giveaway_id,
+                giveaway["chat_id"],
+                giveaway["prize"],
+                json.dumps(winner_ids),
+                len(giveaway["participants"]),
+                time.time(),
+                reroll_count,
+            ),
+        )
+
+
+def get_giveaway_history(chat_id: int, limit: int = 10) -> list[dict]:
+    with cursor() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM giveaway_history
+            WHERE chat_id=?
+            ORDER BY drawn_at DESC
+            LIMIT ?
+            """,
+            (chat_id, limit),
+        ).fetchall()
+    result = []
+    for row in rows:
+        try:
+            winner_ids = json.loads(row["winner_ids"])
+        except (json.JSONDecodeError, TypeError):
+            winner_ids = []
+        result.append({
+            "giveaway_id": str(row["giveaway_id"]),
+            "prize": str(row["prize"]),
+            "winner_ids": winner_ids if isinstance(winner_ids, list) else [],
+            "participant_count": int(row["participant_count"]),
+            "drawn_at": float(row["drawn_at"]),
+            "reroll_count": int(row["reroll_count"]),
+        })
+    return result

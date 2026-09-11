@@ -69,6 +69,7 @@ async def on_seen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
     db.touch_member(chat.id, user.id)
+    db.increment_activity(chat.id, user.id)  # Track messages for leaderboard
 
 
 async def cmd_notag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

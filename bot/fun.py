@@ -11,6 +11,8 @@ from bot.moderation import mention, require_group, resolve_target
 
 log = logging.getLogger(__name__)
 
+# WebSearch is imported dynamically when needed via CallDynamicTool
+
 # {who} is replaced with a clickable mention.
 SCOLDS = (
     "{who}, sit down. The group has seen this movie, and the acting is not getting better.",
@@ -77,3 +79,83 @@ async def cmd_scold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     line = _next_scold(update.effective_chat.id).format(who=mention(target))
     await msg.reply_html(line, disable_web_page_preview=True)
+
+
+async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer questions using Wikipedia first, then web search as fallback."""
+    msg = update.effective_message
+    if not context.args:
+        await msg.reply_text(
+            f"Ask me anything!\nExample: {cmd('ask')} what is the speed of light"
+        )
+        return
+    
+    question = " ".join(context.args)
+    status_msg = await msg.reply_text("Searching...")
+    
+    # Try Wikipedia first (fast, clean, accurate for established facts)
+    try:
+        import wikipedia
+        wikipedia.set_lang("en")
+        results = wikipedia.search(question, results=1)
+        
+        if results:
+            summary = wikipedia.summary(results[0], sentences=2, auto_suggest=False)
+            await status_msg.edit_text(summary)
+            return
+            
+    except wikipedia.exceptions.DisambiguationError as e:
+        # Multiple possible topics - pick the first one
+        try:
+            summary = wikipedia.summary(e.options[0], sentences=2, auto_suggest=False)
+            await status_msg.edit_text(summary)
+            return
+        except Exception:
+            pass  # Fall through to web search
+    except wikipedia.exceptions.PageError:
+        pass  # Fall through to web search
+    except Exception as exc:
+        log.warning("Wikipedia search failed: %s", exc)
+    
+    # Wikipedia failed - fall back to web search (covers recent/obscure topics)
+    try:
+        await status_msg.edit_text("Searching the web...")
+        
+        from duckduckgo_search import DDGS
+        
+        # Get instant answer or text results
+        with DDGS() as ddgs:
+            # Try instant answer first (direct facts)
+            try:
+                answer_result = ddgs.answers(question)
+                if answer_result:
+                    answer = answer_result[0].get("text", "")
+                    if answer:
+                        await status_msg.edit_text(answer)
+                        return
+            except Exception:
+                pass
+            
+            # Fall back to text search results
+            results = list(ddgs.text(question, max_results=1))
+            if results:
+                body = results[0].get("body", "")
+                if body:
+                    # Limit to 2-3 sentences
+                    sentences = body.split(". ")
+                    short_answer = ". ".join(sentences[:2])
+                    if not short_answer.endswith("."):
+                        short_answer += "."
+                    await status_msg.edit_text(short_answer)
+                    return
+        
+        # If we got here, nothing useful was found
+        await status_msg.edit_text(
+            "I couldn't find a good answer. Try rephrasing your question."
+        )
+        
+    except Exception as exc:
+        log.exception("Web search failed")
+        await status_msg.edit_text(
+            "Something went wrong while searching. Try again?"
+        )

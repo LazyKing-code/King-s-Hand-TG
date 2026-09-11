@@ -23,6 +23,7 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('staff')}</b> — reply to ping admins\n"
             f"<b>{cmd('whatsnew')}</b> — latest official update\n"
             f"<b>{cmd('cricket')}</b> · <b>{cmd('rps')}</b> · <b>{cmd('lb')}</b> — games (tap Games)\n\n"
+            f"<b>{cmd('top')}</b> — activity leaderboard (daily, weekly, monthly)\n\n"
             "<b>Fun</b> — whisper, scold, calculator (tap Fun)\n\n"
             "Mute / ban / lock / raid tools are not listed here. "
             "Admins and owners see extra buttons."
@@ -38,6 +39,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('whisper')}</b> — reply, then a private note only they can open\n"
             f"<blockquote>{cmd('whisper')} stay after the call</blockquote>\n"
             f"<b>{cmd('scold')}</b> — playful roast. Reply or @username\n"
+            f"<b>{cmd('ask')}</b> — ask anything (Wikipedia + web search)\n"
+            f"<b>{cmd('top')}</b> — who has sent the most messages (daily, weekly, monthly)\n"
             f"<b>{cmd('stats')}</b> — role, immune, trust, approval, warnings "
             "(admins: reply or tag someone)\n"
             f"<b>{cmd('notag')}</b> · <b>{cmd('tagme')}</b> — skip or join group pings\n"
@@ -57,6 +60,10 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('lb')}</b> — leaderboard for the last 3 days\n"
             f"<b>{cmd('lb')} cricket</b> · <b>{cmd('lb')} rps</b> — match history, "
             "with times, 5 per page\n\n"
+            "<b>Activity</b>\n"
+            f"<b>{cmd('top')}</b> — top 10 chatters today\n"
+            f"<b>{cmd('top')} weekly</b> · <b>{cmd('top')} monthly</b> — "
+            "other periods\n\n"
             "At most 3 matches of each game can run at once per group. "
             "A challenge that nobody accepts in 3 minutes, or a match with no "
             "move for 5 minutes, closes on its own."
@@ -69,6 +76,10 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('scold')}</b> — funny roast. Reply or add @username. "
             "A new line each time.\n"
             f"<blockquote>{cmd('scold')}\n{cmd('scold')} @username</blockquote>\n"
+            f"<b>{cmd('ask')}</b> — ask any question, get a short answer. "
+            "Tries Wikipedia first, then searches the web for recent/obscure topics.\n"
+            f"<blockquote>{cmd('ask')} what is the speed of light\n"
+            f"{cmd('ask')} who won the world cup 2026</blockquote>\n"
             "<b>Calculator</b> — no slash. Send only the sum.\n"
             "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>\n"
             f"<b>{cmd('whatsnew')}</b> — what changed in this bot"
@@ -121,6 +132,13 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('report')}</b> · <b>{cmd('packs')}</b> · "
             f"<b>{cmd('strikes')}</b> · <b>{cmd('forgive')}</b>\n"
             f"<b>{cmd('tag')}</b> · <b>{cmd('joins')}</b>\n\n"
+            "<b>Giveaways</b>\n"
+            f"<b>{cmd('giveaway')}</b> 10m 1 Prize — start a giveaway\n"
+            f"<blockquote>{cmd('giveaway')} 1h 2 Discord Nitro\n"
+            f"{cmd('giveaway')} 10m 1 iPad req:10 age:7</blockquote>\n"
+            f"<b>{cmd('gcancel')}</b> — cancel (reply to giveaway msg)\n"
+            f"<b>{cmd('ghistory')}</b> — last 10 giveaways\n"
+            f"<b>{cmd('greroll')}</b> — reroll winners (reply to giveaway msg or use giveaway_id)\n\n"
             f"Not for admins: {cmd('unreport')}, {cmd('unreportall')}, {cmd('tagall')}, "
             f"{cmd('approve')}, {cmd('trust')}, {cmd('makeadmin')}, raid tools — owner only."
         ),
@@ -274,6 +292,13 @@ _ALIASES = {
     "rps": "games",
     "lb": "games",
     "leaderboard": "games",
+    "ask": "fun",
+    "top": "games",
+    "activity": "games",
+    "giveaway": "admins",
+    "gcancel": "admins",
+    "ghistory": "admins",
+    "greroll": "admins",
 }
 
 

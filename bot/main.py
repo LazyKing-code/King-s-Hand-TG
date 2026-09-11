@@ -29,11 +29,20 @@ from bot.arena import (
     purge_old_results_loop,
     sweep_idle_matches_loop,
 )
+from bot.activity import cmd_top
+from bot.giveaway import (
+    cmd_gcancel,
+    cmd_ghistory,
+    cmd_giveaway,
+    cmd_greroll,
+    draw_giveaway_winners_loop,
+    on_giveaway_callback,
+)
 from bot.calc import on_calc
 from bot.commands import add_cmd, cmd, cmd_name
 from bot.config import BOT_TOKEN
 from bot.flood import cmd_flood, cmd_floodmute, on_flood
-from bot.fun import cmd_scold
+from bot.fun import cmd_ask, cmd_scold
 from bot.leaderboard import cmd_lb, on_lb_callback
 from bot.handlers import (
     cmd_addowner,
@@ -147,16 +156,27 @@ _MEMBER_COMMANDS = [
     ("cricket", "Challenge someone to hand cricket"),
     ("rps", "Challenge someone to rock-paper-scissors"),
     ("lb", "Games leaderboard"),
+    ("ask", "Ask me anything"),
+    ("top", "Activity leaderboard (daily/weekly/monthly)"),
 ]
 _STAFF_COMMANDS = _MEMBER_COMMANDS + [
     ("welcome", "Set the join message"),
     ("unverified", "Joins waiting to verify"),
     ("ban", "Ban someone"),
     ("mute", "Mute someone"),
-    ("kick", "Remove someone"),
-    ("warn", "Warn someone"),
-    ("lock", "Lock the chat"),
-    ("unlock", "Open the chat"),
+    ("kick", "Kick someone"),
+    ("unmute", "Unmute someone"),
+    ("warn", "Issue a warning"),
+    ("unwarn", "Clear warnings"),
+    ("lock", "Lock permissions"),
+    ("unlock", "Unlock permissions"),
+    ("zombies", "Remove deleted/deactivated accounts"),
+    ("makeadmin", "Promote to helper/mod/admin"),
+    ("demote", "Demote admin"),
+    ("giveaway", "Start a giveaway"),
+    ("gcancel", "Cancel a giveaway"),
+    ("ghistory", "Giveaway history"),
+    ("greroll", "Reroll giveaway winners"),
     ("flood", "Anti-flood settings"),
     ("pin", "Pin a message"),
     ("report", "Ban a sticker pack"),
@@ -168,7 +188,6 @@ _STAFF_COMMANDS = _MEMBER_COMMANDS + [
     ("joins", "Recent joins"),
     ("tagall", "Ping everyone"),
     ("setlog", "Link a log chat"),
-    ("makeadmin", "Grant admin through me"),
 ]
 
 
@@ -193,6 +212,7 @@ async def on_startup(app: Application) -> None:
     app.bot_data["release_task"] = asyncio.create_task(maybe_broadcast_on_startup(app))
     app.bot_data["arena_sweep_task"] = asyncio.create_task(sweep_idle_matches_loop(app))
     app.bot_data["arena_purge_task"] = asyncio.create_task(purge_old_results_loop(app))
+    app.bot_data["giveaway_draw_task"] = asyncio.create_task(draw_giveaway_winners_loop(app))
 
 
 async def on_shutdown(app: Application) -> None:
@@ -201,6 +221,7 @@ async def on_shutdown(app: Application) -> None:
         "release_task",
         "arena_sweep_task",
         "arena_purge_task",
+        "giveaway_draw_task",
     ):
         task = app.bot_data.get(key)
         if task:
@@ -237,12 +258,14 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_verify_callback, pattern=r"^vf:"))
     app.add_handler(CallbackQueryHandler(on_arena_callback, pattern=r"^g:"))
     app.add_handler(CallbackQueryHandler(on_lb_callback, pattern=r"^lb:"))
+    app.add_handler(CallbackQueryHandler(on_giveaway_callback, pattern=r"^gv:"))
     add_cmd(app, "whisper", cmd_whisper)
     add_cmd(app, "lock", cmd_lock)
     add_cmd(app, "unlock", cmd_unlock)
     add_cmd(app, "flood", cmd_flood)
     add_cmd(app, "floodmute", cmd_floodmute)
     add_cmd(app, "scold", cmd_scold)
+    add_cmd(app, "ask", cmd_ask)
     add_cmd(app, ["stats", "who", "user"], cmd_stats)
     add_cmd(app, ["tag", "nick"], cmd_tag)
     add_cmd(app, "tagall", cmd_tagall)
@@ -315,6 +338,11 @@ def main() -> None:
     add_cmd(app, "cricket", cmd_cricket)
     add_cmd(app, ["rps", "rockpaperscissors"], cmd_rps)
     add_cmd(app, "lb", cmd_lb)
+    add_cmd(app, "top", cmd_top)
+    add_cmd(app, "giveaway", cmd_giveaway)
+    add_cmd(app, "gcancel", cmd_gcancel)
+    add_cmd(app, "ghistory", cmd_ghistory)
+    add_cmd(app, "greroll", cmd_greroll)
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_members))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left_service))

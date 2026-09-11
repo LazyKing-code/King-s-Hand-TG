@@ -130,5 +130,37 @@
         "At most 3 matches of the same game run at once per group. An unaccepted challenge closes itself after 3 minutes; a match with no move for 5 minutes closes with no result recorded, so nothing sits open for days."
       ]
     ]
+  },
+  {
+    "id": "2026-09-11.5",
+    "date": "11 September 2026",
+    "headline": "Ask me anything",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "New /ask command",
+        "/ask [question] searches Wikipedia first for fast, accurate answers to established facts. If Wikipedia has nothing (recent events, obscure topics), it automatically falls back to web search. Returns a short answer (1-2 sentences max) with no links. Examples: /ask what is einstein's first name, /ask speed of light, /ask who won the world cup 2026."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-11.6",
+    "date": "11 September 2026",
+    "headline": "Activity tracking and giveaway system",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Activity Tracking",
+        "Every message is now counted per user on daily, weekly, and monthly bases. Use /top (or /top daily, /top weekly, /top monthly) to see the top 10 most active chatters. This data is used for giveaway participation requirements."
+      ],
+      [
+        "Giveaway System",
+        "Admins can now run giveaways with /giveaway <duration> <winners> <prize>. Examples: /giveaway 10m 1 iPad Pro, /giveaway 1h 2 Discord Nitro. Features include: multiple parallel giveaways with different timings, participation requirements (minimum messages, account age), instant winner announcements, reroll support (/greroll <giveaway_id>), cancel option (/gcancel by replying to giveaway message), and full history log (/ghistory) with winner and reroll information. Members join by clicking the 'Enter Giveaway' button."
+      ],
+      [
+        "Daily Zombie Scan Improvement",
+        "The daily deleted-account scan now asks for confirmation before kicking instead of auto-kicking. When zombies are found, you'll get a message with /zombies confirm to proceed. If no zombies are found, you'll see a 'no zombies found' message. This gives you more control over account cleanup."
+      ]
+    ]
   }
 ]

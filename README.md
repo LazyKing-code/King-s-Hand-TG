@@ -100,10 +100,16 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/unlock` | Restore permissions |
 | `/flood on` | Anti-flood (`/flood 6 4`, `/floodmute 10m`) |
 | `/scold` | Funny scolding (reply or @username); new line each time |
+| `/ask [question]` | Ask anything - Wikipedia first, then web search for recent topics |
 | `/tag` | Set a member tag; `/tag null` clears it |
 | `/cricket @user` | Hand cricket, one over each. Both pick 1-6 each ball; matching = out |
 | `/rps @user` | One round of rock-paper-scissors |
 | `/lb` | Games leaderboard, last 3 days. `/lb cricket` / `/lb rps` — paginated match history |
+| `/top` | Activity leaderboard (daily/weekly/monthly) - who sends the most messages |
+| `/giveaway` | Admin only: start a giveaway (`/giveaway 10m 1 Prize`) |
+| `/gcancel` | Admin only: cancel a giveaway (reply to the message) |
+| `/ghistory` | Admin only: view past giveaways and reroll history |
+| `/greroll` | Admin only: reroll giveaway winners (reply to giveaway message) |
 | `/whatsnew` | Official update card (also sent in private to people who `/start`) |
 | `/release send` | Owner only: deliver that card to known starters |
 | `/help` | Command guide |
@@ -121,4 +127,40 @@ During an active flood: `/raidmode 1h` then later `/purgejoins 2h` → `/purgejo
 ## Games
 
 `/cricket` and `/rps` are text + button matches, all state kept in the database (no images, no in-memory state to lose on restart). At most 3 matches of each game run at once per group. An unaccepted challenge auto-closes after 3 minutes; a live match with no move for 5 minutes auto-closes with no result recorded. Match history (`/lb cricket` / `/lb rps`) only keeps the last 3 days.
+
+## Activity Tracking
+
+Every group message is counted per user. The bot tracks:
+- **Daily** (resets after 24 hours)
+- **Weekly** (resets after 7 days)
+- **Monthly** (resets after 30 days)
+
+Use `/top` (or `/top daily` / `/top weekly` / `/top monthly`) to see the top 10 chatters. This helps identify the most active members and is used as a requirement condition for giveaways.
+
+## Giveaways
+
+Admins can run giveaways with `/giveaway <duration> <winners> <prize>`:
+
+```
+/giveaway 10m 1 iPad Pro
+/giveaway 1h 2 Discord Nitro
+/giveaway 30m 1 Prize req:10 age:7
+```
+
+**Features:**
+- Duration: 10s, 5m, 1h, 2d (up to 30 days)
+- Multiple winners: 1-10
+- Requirements:
+  - `req:10` — minimum 10 messages needed
+  - `age:7` — account age 7+ days (optional)
+- Members click "Enter Giveaway" button to participate
+- Winners are auto-announced when time expires
+- `/gcancel` (reply to giveaway message) to cancel
+- `/greroll` (reply to giveaway message) to pick new winners
+- `/ghistory` shows last 10 giveaways with participant counts and reroll history
+- Multiple giveaways can run in parallel with different timings
+- Real-time instant capture and announcements
+
+**Daily Zombie Scan:**
+The bot checks for deleted/deactivated accounts daily and asks if you want to kick them. If none found, it sends a "no zombies found" message. Reply `/zombies confirm` when prompted to kick them.
 
