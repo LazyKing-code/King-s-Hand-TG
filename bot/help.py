@@ -74,7 +74,7 @@ def _pages() -> dict[str, str]:
             "<b>Note:</b> Cricket has a short click cooldown. "
             "At most 3 cricket/rps matches of each kind can run at once per group. "
             "A person can only be in one cricket (or rps) match at a time. "
-            "Wordle: send a valid word while a game is live; short per-person cooldown "
+            "Wordle: send any 4- or 5-letter word while a game is live; short per-person cooldown "
             "keeps the chat calm. Staff can cancel with "
             f"<code>{cmd('wordle')} cancel</code>."
         ),

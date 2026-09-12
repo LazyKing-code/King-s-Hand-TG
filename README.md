@@ -130,7 +130,7 @@ During an active flood: `/raidmode 1h` then later `/purgejoins 2h` → `/purgejo
 
 `/cricket` and `/rps` are text + button matches, all state kept in the database (no images, no in-memory state to lose on restart).
 
-**Wordle:** `/wordle` (or `/wordle 4` / `/wordle 5`) starts a shared group puzzle. Anyone can start; only one game runs at a time. Players guess by sending a valid word; the board is refreshed by deleting the old message and posting a new one together (so it stays quick and tidy). First correct guess wins. After 5 minutes the word is revealed. Per-person guess cooldown avoids spam. Staff can stop early with `/wordle cancel` and start again.
+**Wordle:** `/wordle` (or `/wordle 4` / `/wordle 5`) starts a shared group puzzle. Anyone can start; only one game runs at a time. Players guess by sending any 4- or 5-letter word; the board is refreshed by deleting the old message and posting a new one together (so it stays quick and tidy). First correct guess wins. After 5 minutes the word is revealed. Per-person guess cooldown avoids spam. Staff can stop early with `/wordle cancel` and start again.
 
 **Cricket improvements:**
 - **Accept first**: Rival Accepts/Declines the challenge before overs are chosen

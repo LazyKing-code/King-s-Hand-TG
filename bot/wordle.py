@@ -121,7 +121,7 @@ def _format_board(game: dict, *, footer: str | None = None) -> str:
         lines.append(footer)
     elif status == "active":
         lines.append(
-            f"Send a <b>{length}-letter</b> word from the list. "
+            f"Send any <b>{length}-letter</b> word (A–Z). "
             "First correct guess wins!"
         )
         lines.append(
@@ -363,12 +363,10 @@ async def on_wordle_guess(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     guess = text.upper()
-    bank = words_for(length)
-    if guess not in bank:
-        await _soft_hint(
-            msg,
-            "That word isn't on this game's list — try another one. You've got this!",
-        )
+    # Any real-looking word of the right length is a valid guess. The secret
+    # still comes from the clean bank — keeping the guess list tiny felt broken
+    # (e.g. common words like TIER were rejected).
+    if not guess.isalpha() or len(guess) != length:
         return
 
     key = (chat.id, user.id)

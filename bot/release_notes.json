@@ -438,5 +438,17 @@
         "Guesses like four were being ignored because another handler ate the message first. After this update, send a 4- or 5-letter word while a game is running and the board should update."
       ]
     ]
+  },
+  {
+    "id": "2026-09-12.4",
+    "date": "12 September 2026",
+    "headline": "Wordle accepts more guesses",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Wordle",
+        "You can guess any 4- or 5-letter word now (like tier). Only the hidden answer is picked from the bot's word bank — common words are no longer rejected."
+      ]
+    ]
   }
 ]
