@@ -380,28 +380,30 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left_service))
     app.add_handler(MessageHandler(filters.StatusUpdate.CHAT_SHARED, on_chat_shared))
     app.add_handler(MessageHandler(filters.ALL & ~filters.StatusUpdate.ALL, on_seen), group=-1)
-    app.add_handler(MessageHandler(filters.Sticker.ALL, on_sticker))
-    app.add_handler(
-        MessageHandler(
-            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
-            on_triggers,
-        ),
-        group=0,
-    )
+    app.add_handler(MessageHandler(filters.Sticker.ALL, on_sticker), group=0)
+    # PTB runs only ONE matching handler per group. Wordle must be its own group or
+    # triggers/calc would swallow every plain-text guess.
     app.add_handler(
         MessageHandler(
             filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND,
             on_wordle_guess,
         ),
-        group=0,
-    )
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, on_calc),
         group=1,
     )
     app.add_handler(
-        MessageHandler(filters.ALL & ~filters.StatusUpdate.ALL, on_flood),
+        MessageHandler(
+            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
+            on_triggers,
+        ),
         group=2,
+    )
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, on_calc),
+        group=3,
+    )
+    app.add_handler(
+        MessageHandler(filters.ALL & ~filters.StatusUpdate.ALL, on_flood),
+        group=4,
     )
     app.add_error_handler(on_error)
     log.info("Bot starting")
