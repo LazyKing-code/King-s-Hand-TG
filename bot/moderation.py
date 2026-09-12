@@ -6,10 +6,10 @@ from html import escape
 
 from telegram import ChatMember, Message, Update, User
 from telegram.constants import ChatType
-from telegram.error import RetryAfter, TelegramError
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from bot import db
+from bot import db, rights, tg
 from bot.commands import cmd
 from bot.config import IMMUNE_IDS, OWNER_IDS
 from bot.placeholder import ensure_placeholder_file
@@ -148,7 +148,8 @@ async def send_to_log(
         pass
     body = f"<b>{escape(event)}</b>\nFrom: {escape(title)}\n{html}"
     try:
-        await context.bot.send_message(
+        await tg.send_message(
+            context.bot,
             log_chat_id,
             body,
             parse_mode="HTML",
@@ -186,7 +187,8 @@ async def notify(
             )
             body = html + extra
             try:
-                await context.bot.edit_message_text(
+                await tg.edit_message_text(
+                    context.bot,
                     body,
                     chat_id=chat_id,
                     message_id=batch["msg_id"],
@@ -198,14 +200,18 @@ async def notify(
             await send_to_log(context, chat_id, body, event)
             return
         try:
-            sent = await context.bot.send_message(
+            sent = await tg.send_message(
+                context.bot,
                 chat_id,
                 body,
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
-        except Exception:
+        except Exception as exc:
             log.exception("Group notify failed")
+            await rights.alert_failure(
+                context, chat_id, "notify", exc, prefix="I couldn't post a notice"
+            )
             await send_to_log(context, chat_id, body, event)
             return
         _notice_batch[key] = {
@@ -216,14 +222,18 @@ async def notify(
         await send_to_log(context, chat_id, body, event)
         return
     try:
-        await context.bot.send_message(
+        await tg.send_message(
+            context.bot,
             chat_id,
             html,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-    except Exception:
+    except Exception as exc:
         log.exception("Group notify failed")
+        await rights.alert_failure(
+            context, chat_id, "notify", exc, prefix="I couldn't post a notice"
+        )
     await send_to_log(context, chat_id, html, event)
 
 
@@ -236,24 +246,29 @@ async def announce_kick(
 ) -> None:
     who = mention(user)
     if not ok:
-        await notify(
+        # kick() already posted a clear rights/error alert — don't spam a second line.
+        await send_to_log(
             context,
             chat.id,
-            f"Could not kick {who}.",
+            f"Kick failed for {who} (<code>{user.id}</code>). Reason: {escape(reason)}",
             event="Kick failed",
         )
         return
     title = getattr(chat, "title", None) or str(chat.id)
     html = format_kick_html(db.get_kick_message(chat.id), user, reason, title)
     try:
-        await context.bot.send_message(
+        await tg.send_message(
+            context.bot,
             chat.id,
             html,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-    except Exception:
+    except Exception as exc:
         log.exception("Kick message failed")
+        await rights.alert_failure(
+            context, chat.id, "kick_msg", exc, prefix="Kick worked but I couldn't announce it"
+        )
     await send_to_log(
         context,
         chat.id,
@@ -446,14 +461,17 @@ _DEMOTE_FLAGS = {
 
 
 async def demote(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> bool:
+    blocked = await rights.ensure_rights(
+        context, chat_id, "promote", alert_key="promote"
+    )
+    if blocked:
+        return False
     try:
-        me = await context.bot.get_chat_member(chat_id, context.bot.id)
-        if me.status == ChatMember.ADMINISTRATOR and not getattr(
-            me, "can_promote_members", False
-        ):
-            log.warning("Cannot demote %s: bot lacks Add admins", user_id)
-            return False
-        target = await context.bot.get_chat_member(chat_id, user_id)
+        me = await rights.get_bot_member(context, chat_id)
+        target = await tg.call(
+            lambda: context.bot.get_chat_member(chat_id, user_id),
+            chat_id=chat_id,
+        )
         if target.status == ChatMember.OWNER:
             return False
         if target.status != ChatMember.ADMINISTRATOR:
@@ -464,35 +482,68 @@ async def demote(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int)
                 "Cannot demote %s: not promoted by this bot (can_be_edited=false)",
                 user_id,
             )
+            await rights.alert_problem(
+                context,
+                chat_id,
+                "demote_foreign",
+                "I couldn't demote someone because I didn't promote them. "
+                f"Drop them yourself, then use {cmd('makeadmin')} through me.",
+            )
             return False
         try:
-            await context.bot.promote_chat_member(
-                chat_id=chat_id, user_id=user_id, **_DEMOTE_FLAGS
+            await tg.call(
+                lambda: context.bot.promote_chat_member(
+                    chat_id=chat_id, user_id=user_id, **_DEMOTE_FLAGS
+                ),
+                chat_id=chat_id,
             )
         except Exception:
-            chat = await context.bot.get_chat(chat_id)
-            await context.bot.promote_chat_member(
+            chat = await tg.call(lambda: context.bot.get_chat(chat_id), chat_id=chat_id)
+            await tg.call(
+                lambda: context.bot.promote_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    **_admin_rights_kwargs(me, chat, grant=False),
+                ),
                 chat_id=chat_id,
-                user_id=user_id,
-                **_admin_rights_kwargs(me, chat, grant=False),
             )
-        after = await context.bot.get_chat_member(chat_id, user_id)
+        after = await tg.call(
+            lambda: context.bot.get_chat_member(chat_id, user_id),
+            chat_id=chat_id,
+        )
         ok = after.status != ChatMember.ADMINISTRATOR
         if ok:
             db.clear_admin_role(chat_id, user_id)
         return ok
-    except Exception:
+    except Exception as exc:
         log.exception("Failed to demote %s", user_id)
+        await rights.alert_failure(
+            context, chat_id, "demote", exc, prefix="I couldn't demote someone"
+        )
         return False
 
 
 async def kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> bool:
+    blocked = await rights.ensure_rights(
+        context, chat_id, "restrict", alert_key="restrict"
+    )
+    if blocked:
+        return False
     try:
-        await context.bot.ban_chat_member(chat_id, user_id)
-        await context.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
+        await tg.call(
+            lambda: context.bot.ban_chat_member(chat_id, user_id),
+            chat_id=chat_id,
+        )
+        await tg.call(
+            lambda: context.bot.unban_chat_member(chat_id, user_id, only_if_banned=True),
+            chat_id=chat_id,
+        )
         return True
-    except Exception:
+    except Exception as exc:
         log.exception("Failed to kick %s", user_id)
+        await rights.alert_failure(
+            context, chat_id, "kick", exc, prefix="I couldn't kick someone"
+        )
         return False
 
 
@@ -534,11 +585,10 @@ async def send_placeholder(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> 
         custom = db.get_placeholder(chat_id)
         if custom:
             try:
-                await context.bot.send_sticker(chat_id, custom)
-                return
-            except RetryAfter as exc:
-                _last_placeholder[chat_id] = time.time() + float(exc.retry_after)
-                log.warning("Placeholder delayed %ss in %s", exc.retry_after, chat_id)
+                await tg.call(
+                    lambda: context.bot.send_sticker(chat_id, custom),
+                    chat_id=chat_id,
+                )
                 return
             except Exception:
                 log.exception("Custom placeholder failed for chat %s", chat_id)
@@ -546,10 +596,10 @@ async def send_placeholder(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> 
         cached = db.kv_get("default_placeholder_file_id")
         if cached:
             try:
-                await context.bot.send_sticker(chat_id, cached)
-                return
-            except RetryAfter as exc:
-                _last_placeholder[chat_id] = time.time() + float(exc.retry_after)
+                await tg.call(
+                    lambda: context.bot.send_sticker(chat_id, cached),
+                    chat_id=chat_id,
+                )
                 return
             except Exception:
                 log.exception("Cached default placeholder failed")
@@ -557,19 +607,29 @@ async def send_placeholder(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> 
 
         path = ensure_placeholder_file()
         try:
-            msg = await context.bot.send_sticker(chat_id, path)
+            msg = await tg.call(
+                lambda: context.bot.send_sticker(chat_id, path),
+                chat_id=chat_id,
+            )
             if msg.sticker and msg.sticker.file_id:
                 db.kv_set("default_placeholder_file_id", msg.sticker.file_id)
-            return
-        except RetryAfter as exc:
-            _last_placeholder[chat_id] = time.time() + float(exc.retry_after)
             return
         except Exception:
             log.exception("Default placeholder sticker failed")
         try:
-            await context.bot.send_photo(chat_id, path)
-        except Exception:
+            await tg.call(
+                lambda: context.bot.send_photo(chat_id, path),
+                chat_id=chat_id,
+            )
+        except Exception as exc:
             log.exception("Placeholder photo fallback failed")
+            await rights.alert_failure(
+                context,
+                chat_id,
+                "placeholder",
+                exc,
+                prefix="I removed a sticker but couldn't post a placeholder",
+            )
 
     try:
         await _send()

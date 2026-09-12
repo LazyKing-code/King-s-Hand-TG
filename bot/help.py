@@ -22,7 +22,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('notes')}</b> · send <code>#name</code> for a saved note\n"
             f"<b>{cmd('staff')}</b> — reply to ping admins\n"
             f"<b>{cmd('whatsnew')}</b> — latest official update\n"
-            f"<b>{cmd('cricket')}</b> · <b>{cmd('rps')}</b> · <b>{cmd('gboard')}</b> — games (tap Games)\n\n"
+            f"<b>{cmd('cricket')}</b> · <b>{cmd('rps')}</b> · <b>{cmd('wordle')}</b> · "
+            f"<b>{cmd('gboard')}</b> — games (tap Games)\n\n"
             f"<b>{cmd('active')}</b> — activity leaderboard (daily, weekly, monthly)\n\n"
             "<b>Fun</b> — whisper, scold, calculator (tap Fun)\n\n"
             "Mute / ban / lock / raid tools are not listed here. "
@@ -48,7 +49,7 @@ def _pages() -> dict[str, str]:
             f"<code>{cmd('whatsnew')} history</code>\n\n"
             "<b>Calculator</b> — send only the sum, no command.\n"
             "<blockquote>2+2\n(5*3)/2\n2^8</blockquote>\n\n"
-            "<b>Games</b> — tap Games below for cricket, rock-paper-scissors, and the board."
+            "<b>Games</b> — tap Games below for cricket, rps, Wordle, and the board."
         ),
         "games": (
             "<b>Games</b>\n\n"
@@ -58,6 +59,11 @@ def _pages() -> dict[str, str]:
             f"<blockquote>{cmd('cricket')} @username</blockquote>\n"
             f"<b>{cmd('rps')}</b> @username — one round of rock-paper-scissors.\n"
             f"<blockquote>{cmd('rps')} @username</blockquote>\n"
+            f"<b>{cmd('wordle')}</b> — group word game. Anyone can start (4 or 5 letters). "
+            "Everyone guesses the same word; first correct guess wins. "
+            "Runs 5 minutes, then the word is revealed. One game at a time.\n"
+            f"<blockquote>{cmd('wordle')}\n{cmd('wordle')} 5\n"
+            f"{cmd('wordle')} cancel</blockquote>\n"
             f"<b>{cmd('gboard')}</b> — leaderboard for the last 3 days\n"
             f"<b>{cmd('gboard')} cricket</b> · <b>{cmd('gboard')} rps</b> — match history, "
             "with times, 5 per page\n\n"
@@ -65,11 +71,12 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('active')}</b> — top 10 chatters today\n"
             f"<b>{cmd('active')} weekly</b> · <b>{cmd('active')} monthly</b> — "
             "other periods\n\n"
-            "<b>Note:</b> Cricket now has smoother gameplay with spam protection (500ms cooldown). "
-            "At most 3 matches of each game can run at once per group. "
+            "<b>Note:</b> Cricket has a short click cooldown. "
+            "At most 3 cricket/rps matches of each kind can run at once per group. "
             "A person can only be in one cricket (or rps) match at a time. "
-            "A challenge that nobody accepts in 1 minute, or a match with no "
-            "move for 5 minutes, closes on its own."
+            "Wordle: send a valid word while a game is live; short per-person cooldown "
+            "keeps the chat calm. Staff can cancel with "
+            f"<code>{cmd('wordle')} cancel</code>."
         ),
         "fun": (
             "<b>Fun</b>\n\n"
@@ -117,6 +124,7 @@ def _pages() -> dict[str, str]:
             "<b>Staff — admins</b>\n"
             "Sensitive. Members do not get this page.\n\n"
             f"<b>{cmd('lock')}</b> · <b>{cmd('unlock')}</b>\n"
+            f"<b>{cmd('rights')}</b> — what permissions I have in this group\n"
             f"<b>{cmd('flood')}</b> · <b>{cmd('floodmute')}</b>\n"
             f"<blockquote>{cmd('flood')} on\n{cmd('flood')} 6 4\n"
             f"{cmd('floodmute')} 10m</blockquote>\n"
@@ -165,7 +173,8 @@ def _pages() -> dict[str, str]:
             f"<b>{cmd('unreport')}</b> · <b>{cmd('unreportall')}</b>\n"
             f"<b>{cmd('addowner')}</b> · <b>{cmd('removeowner')}</b> · "
             f"<b>{cmd('owners')}</b>\n"
-            f"<b>{cmd('release')} send</b> — official update to people who /start the bot"
+            f"<b>{cmd('release')} send</b> — official update to people who /start the bot\n"
+            f"<b>{cmd('backupdb')}</b> — download a SQLite backup (prefer private chat)"
         ),
         "add": (
             f"{ADD_TEXT}\n\n"
@@ -269,6 +278,7 @@ _ALIASES = {
     "calc": "fun",
     "lock": "admins",
     "flood": "admins",
+    "rights": "admins",
     "welcome": "admins",
     "ban": "admins",
     "mute": "admins",
@@ -291,10 +301,12 @@ _ALIASES = {
     "overview": "index",
     "whatsnew": "fun",
     "release": "owner",
+    "backupdb": "owner",
     "games": "games",
     "game": "games",
     "cricket": "games",
     "rps": "games",
+    "wordle": "games",
     "gboard": "games",
     "leaderboard": "games",
     "ask": "fun",

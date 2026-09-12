@@ -9,7 +9,7 @@ from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from bot.commands import cmd
-from bot import db
+from bot import db, rights, tg
 from bot.lock import LOCKED
 from bot.moderation import is_immune, is_owner, mention, require_group_admin, send_to_log
 from bot.raid import cached_admin_ids, parse_duration
@@ -105,30 +105,44 @@ async def on_flood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     times.clear()
     until = int(now) + mute_for
-    try:
-        await context.bot.restrict_chat_member(
-            chat.id,
-            user.id,
-            permissions=LOCKED,
-            until_date=until,
-        )
-    except Exception:
-        log.exception("flood mute failed")
+    blocked = await rights.ensure_rights(
+        context, chat.id, "restrict", alert_key="restrict"
+    )
+    if blocked:
         return
     try:
-        await message.delete()
+        await tg.call(
+            lambda: context.bot.restrict_chat_member(
+                chat.id,
+                user.id,
+                permissions=LOCKED,
+                until_date=until,
+            ),
+            chat_id=chat.id,
+        )
+    except Exception as exc:
+        log.exception("flood mute failed")
+        await rights.alert_failure(
+            context, chat.id, "flood_mute", exc, prefix="Flood mute failed"
+        )
+        return
+    try:
+        await tg.delete_message(context.bot, chat.id, message.message_id)
     except Exception:
         pass
     minutes = mute_for // 60
     who = mention(user)
     try:
-        await context.bot.send_message(
+        await tg.send_message(
+            context.bot,
             chat.id,
             f"{who} hit the flood limit and is muted for {minutes} min.",
             parse_mode="HTML",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        await rights.alert_failure(
+            context, chat.id, "flood_announce", exc, prefix="Flood mute applied but I couldn't announce it"
+        )
     await send_to_log(
         context,
         chat.id,

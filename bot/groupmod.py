@@ -10,7 +10,7 @@ from telegram import ChatMember, Update, User
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from bot import db
+from bot import db, rights
 from bot.commands import cmd
 from bot.config import IMMUNE_IDS, OWNER_IDS
 from bot.lock import LOCKED, OPEN
@@ -200,7 +200,7 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             until_date=until,
         )
     except TelegramError as exc:
-        await update.effective_message.reply_text(getattr(exc, "message", None) or str(exc))
+        await update.effective_message.reply_text(rights.friendly_error(exc))
         return
     except Exception:
         log.exception("ban failed")
@@ -229,7 +229,7 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             update.effective_chat.id, target.id, only_if_banned=True
         )
     except TelegramError as exc:
-        await update.effective_message.reply_text(getattr(exc, "message", None) or str(exc))
+        await update.effective_message.reply_text(rights.friendly_error(exc))
         return
     except Exception:
         log.exception("unban failed")
@@ -261,7 +261,7 @@ async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             until_date=until,
         )
     except TelegramError as exc:
-        await update.effective_message.reply_text(getattr(exc, "message", None) or str(exc))
+        await update.effective_message.reply_text(rights.friendly_error(exc))
         return
     except Exception:
         log.exception("mute failed")
@@ -294,7 +294,7 @@ async def cmd_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             permissions=perms,
         )
     except TelegramError as exc:
-        await update.effective_message.reply_text(getattr(exc, "message", None) or str(exc))
+        await update.effective_message.reply_text(rights.friendly_error(exc))
         return
     except Exception:
         log.exception("unmute failed")
@@ -320,7 +320,7 @@ async def cmd_pin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             disable_notification=not notify,
         )
     except TelegramError as exc:
-        await msg.reply_text(getattr(exc, "message", None) or str(exc))
+        await msg.reply_text(rights.friendly_error(exc))
         return
     await msg.reply_text("Pinned." if notify else "Pinned silently.")
 
@@ -338,7 +338,7 @@ async def cmd_unpin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             await context.bot.unpin_chat_message(update.effective_chat.id)
     except TelegramError as exc:
-        await msg.reply_text(getattr(exc, "message", None) or str(exc))
+        await msg.reply_text(rights.friendly_error(exc))
         return
     await msg.reply_text("Unpinned.")
 
@@ -349,7 +349,7 @@ async def cmd_unpinall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         await context.bot.unpin_all_chat_messages(update.effective_chat.id)
     except TelegramError as exc:
-        await update.effective_message.reply_text(getattr(exc, "message", None) or str(exc))
+        await update.effective_message.reply_text(rights.friendly_error(exc))
         return
     await update.effective_message.reply_text("All pins removed.")
 

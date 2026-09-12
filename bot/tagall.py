@@ -8,10 +8,9 @@ from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType
-from telegram.error import RetryAfter, TelegramError
 from telegram.ext import ContextTypes
 
-from bot import db
+from bot import db, tg
 from bot.commands import cmd
 from bot.config import OWNER_IDS
 from bot.moderation import require_group
@@ -47,18 +46,13 @@ async def _require_you(update: Update) -> bool:
 
 
 async def _send_html(bot, chat_id: int, body: str) -> None:
-    for _ in range(4):
-        try:
-            await bot.send_message(
-                chat_id,
-                body,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-            return
-        except RetryAfter as exc:
-            await asyncio.sleep(float(exc.retry_after) + 0.5)
-    raise TelegramError("tagall hit RetryAfter too many times")
+    await tg.send_message(
+        bot,
+        chat_id,
+        body,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 async def on_seen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

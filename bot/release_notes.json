@@ -394,5 +394,37 @@
         "You do not need a Brave or other API key. /ask now uses free sources that work from the server first, so normal questions get answers even when DuckDuckGo is rate-limiting the cloud IP. An API key stays optional only if you ever want extra web results."
       ]
     ]
+  },
+  {
+    "id": "2026-09-12.1",
+    "date": "12 September 2026",
+    "headline": "Group Wordle",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Wordle",
+        "Anyone can start a shared word game with /wordle (4 or 5 letters). Guess by sending a word — first correct guess wins. One game at a time; after 5 minutes the word is revealed. Staff can stop it with /wordle cancel."
+      ],
+      [
+        "Board refresh",
+        "The board updates by clearing the old message and posting a fresh one together, so it stays quick and tidy without flooding the chat."
+      ]
+    ]
+  },
+  {
+    "id": "2026-09-12.2",
+    "date": "12 September 2026",
+    "headline": "Clearer errors and steadier sending",
+    "intro": "Only what changed is listed below.",
+    "sections": [
+      [
+        "Permissions",
+        "If I can't delete, kick, mute, or post a notice, I say so in plain English instead of failing quietly. Admins can check my rights anytime with /rights."
+      ],
+      [
+        "Flood and backups",
+        "Outbound Telegram calls are paced and retry when Telegram asks us to slow down. Bot owners can download a database backup with /backupdb (best in a private chat)."
+      ]
+    ]
   }
 ]

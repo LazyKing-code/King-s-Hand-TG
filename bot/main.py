@@ -38,9 +38,15 @@ from bot.giveaway import (
     draw_giveaway_winners_loop,
     on_giveaway_callback,
 )
+from bot.wordle import (
+    cmd_wordle,
+    expire_wordles_loop,
+    on_wordle_callback,
+    on_wordle_guess,
+)
 from bot.calc import on_calc
 from bot.commands import add_cmd, cmd, cmd_name
-from bot.config import BOT_TOKEN
+from bot.config import BOT_TOKEN, DATA_DIR, DB_PATH
 from bot.flood import cmd_flood, cmd_floodmute, on_flood
 from bot.fun import cmd_ask, cmd_scold
 from bot.leaderboard import cmd_gboard, on_gboard_callback
@@ -49,6 +55,7 @@ from bot.handlers import (
     cmd_allowpack,
     cmd_allowsticker,
     cmd_approve,
+    cmd_backupdb,
     cmd_clearkickmsg,
     cmd_clearplaceholder,
     cmd_dropadmin,
@@ -62,6 +69,7 @@ from bot.handlers import (
     on_packs_callback,
     cmd_removeowner,
     cmd_report,
+    cmd_rights,
     cmd_setkickmsg,
     cmd_setlog,
     cmd_setplaceholder,
@@ -155,6 +163,7 @@ _MEMBER_COMMANDS = [
     ("tagme", "Include me in pings"),
     ("cricket", "Challenge someone to hand cricket"),
     ("rps", "Challenge someone to rock-paper-scissors"),
+    ("wordle", "Start a group Wordle"),
     ("gboard", "Games leaderboard"),
     ("ask", "Ask me anything"),
     ("active", "Activity leaderboard (daily/weekly/monthly)"),
@@ -177,6 +186,7 @@ _STAFF_COMMANDS = _MEMBER_COMMANDS + [
     ("gcancel", "Cancel a giveaway"),
     ("ghistory", "Giveaway history"),
     ("greroll", "Reroll giveaway winners"),
+    ("rights", "Check bot admin permissions"),
     ("flood", "Anti-flood settings"),
     ("pin", "Pin a message"),
     ("report", "Ban a sticker pack"),
@@ -207,12 +217,29 @@ async def on_startup(app: Application) -> None:
         scope=BotCommandScopeAllChatAdministrators(),
     )
     log.info("Commands ready (e.g. %s)", cmd("help"))
+    log.info("SQLite path=%s (DATA_DIR=%s)", DB_PATH, DATA_DIR)
+    if str(DATA_DIR).replace("\\", "/") in {"/data", "/data/"} or DATA_DIR.as_posix().endswith("/data"):
+        log.info("DATA_DIR looks like a mounted volume — good for Railway.")
+    else:
+        log.warning(
+            "DATA_DIR is %s — on Railway mount a persistent volume at /data "
+            "and set DATA_DIR=/data so the DB survives redeploys. Run only ONE replica.",
+            DATA_DIR,
+        )
+    try:
+        with db.cursor() as conn:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+            ok = row[0] if row else "?"
+            log.info("SQLite integrity_check=%s", ok)
+    except Exception:
+        log.exception("SQLite integrity check failed")
     await schedule_pending_jobs(app)
     app.bot_data["zombies_task"] = asyncio.create_task(daily_zombies_loop(app))
     app.bot_data["release_task"] = asyncio.create_task(maybe_broadcast_on_startup(app))
     app.bot_data["arena_sweep_task"] = asyncio.create_task(sweep_idle_matches_loop(app))
     app.bot_data["arena_purge_task"] = asyncio.create_task(purge_old_results_loop(app))
     app.bot_data["giveaway_draw_task"] = asyncio.create_task(draw_giveaway_winners_loop(app))
+    app.bot_data["wordle_expire_task"] = asyncio.create_task(expire_wordles_loop(app))
 
 
 async def on_shutdown(app: Application) -> None:
@@ -222,6 +249,7 @@ async def on_shutdown(app: Application) -> None:
         "arena_sweep_task",
         "arena_purge_task",
         "giveaway_draw_task",
+        "wordle_expire_task",
     ):
         task = app.bot_data.get(key)
         if task:
@@ -259,6 +287,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_arena_callback, pattern=r"^g:"))
     app.add_handler(CallbackQueryHandler(on_gboard_callback, pattern=r"^gb:"))
     app.add_handler(CallbackQueryHandler(on_giveaway_callback, pattern=r"^gv:"))
+    app.add_handler(CallbackQueryHandler(on_wordle_callback, pattern=r"^wd:"))
     add_cmd(app, "whisper", cmd_whisper)
     add_cmd(app, "lock", cmd_lock)
     add_cmd(app, "unlock", cmd_unlock)
@@ -301,6 +330,8 @@ def main() -> None:
     add_cmd(app, "dropadmin", cmd_dropadmin)
     add_cmd(app, "dropadmins", cmd_dropadmins)
     add_cmd(app, "kick", cmd_kick)
+    add_cmd(app, "rights", cmd_rights)
+    add_cmd(app, "backupdb", cmd_backupdb)
     add_cmd(app, ["welcome", "setwelcome"], cmd_welcome)
     add_cmd(app, ["goodbye", "setgoodbye"], cmd_goodbye)
     add_cmd(app, ["verify", "captcha"], cmd_verify)
@@ -337,6 +368,7 @@ def main() -> None:
     add_cmd(app, ["unblacklist", "unbl"], cmd_unblacklist)
     add_cmd(app, "cricket", cmd_cricket)
     add_cmd(app, ["rps", "rockpaperscissors"], cmd_rps)
+    add_cmd(app, "wordle", cmd_wordle)
     add_cmd(app, "gboard", cmd_gboard)
     add_cmd(app, "active", cmd_active)
     add_cmd(app, "giveaway", cmd_giveaway)
@@ -353,6 +385,13 @@ def main() -> None:
         MessageHandler(
             filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
             on_triggers,
+        ),
+        group=0,
+    )
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND,
+            on_wordle_guess,
         ),
         group=0,
     )

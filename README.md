@@ -104,13 +104,15 @@ Send `/help` in the group. Common names: `/kick` `/ban` `/mute` `/lock` `/welcom
 | `/tag` | Set a member tag; `/tag null` clears it |
 | `/cricket @user` | Hand cricket. Accept first, then challenger picks 1–3 overs. Matching picks = out |
 | `/rps @user` | One round of rock-paper-scissors |
+| `/wordle` | Group Wordle (4 or 5 letters). Anyone starts; one game at a time. `/wordle cancel` for staff |
 | `/gboard` | Games leaderboard, last 3 days. `/gboard cricket` / `/gboard rps` — paginated match history |
 | `/active` | Activity leaderboard (daily/weekly/monthly) - who sends the most messages |
 | `/giveaway` | Admin only: start a giveaway (`/giveaway 10m 1 Prize`) |
 | `/gcancel` | Admin only: cancel a giveaway (reply to the message) |
 | `/ghistory` | Admin only: view past giveaways and reroll history |
 | `/greroll` | Admin only: reroll giveaway winners (reply to giveaway message) |
-| `/whatsnew` | Official update card (also sent in private to people who `/start`) |
+| `/rights` | Admin: show which permissions the bot has in this group |
+| `/backupdb` | Bot owner only: download a SQLite backup (use in private chat) |
 | `/release send` | Owner only: deliver that card to known starters |
 | `/help` | Command guide |
 
@@ -126,7 +128,9 @@ During an active flood: `/raidmode 1h` then later `/purgejoins 2h` → `/purgejo
 
 ## Games
 
-`/cricket` and `/rps` are text + button matches, all state kept in the database (no images, no in-memory state to lose on restart). 
+`/cricket` and `/rps` are text + button matches, all state kept in the database (no images, no in-memory state to lose on restart).
+
+**Wordle:** `/wordle` (or `/wordle 4` / `/wordle 5`) starts a shared group puzzle. Anyone can start; only one game runs at a time. Players guess by sending a valid word; the board is refreshed by deleting the old message and posting a new one together (so it stays quick and tidy). First correct guess wins. After 5 minutes the word is revealed. Per-person guess cooldown avoids spam. Staff can stop early with `/wordle cancel` and start again.
 
 **Cricket improvements:**
 - **Accept first**: Rival Accepts/Declines the challenge before overs are chosen
@@ -136,7 +140,7 @@ During an active flood: `/raidmode 1h` then later `/purgejoins 2h` → `/purgejo
 - **Spam protection**: 500ms cooldown between button clicks to prevent lag
 - **Smooth gameplay**: Instant feedback with emojis and clear status messages
 
-At most 3 matches of each game run at once per group. The same person cannot be in two cricket (or rps) matches at the same time. An unaccepted challenge auto-closes after 1 minute; a live match with no move for 5 minutes auto-closes with no result recorded. Match history (`/gboard cricket` / `/gboard rps`) only keeps the last 3 days.
+At most 3 matches of each cricket/rps game run at once per group. The same person cannot be in two cricket (or rps) matches at the same time. An unaccepted challenge auto-closes after 1 minute; a live match with no move for 5 minutes auto-closes with no result recorded. Match history (`/gboard cricket` / `/gboard rps`) only keeps the last 3 days.
 
 **Important:** When challenging someone with `/cricket @username`, you must either:
 - Reply to their message, or
@@ -181,4 +185,22 @@ Admins can run giveaways with `/giveaway <duration> <winners> <prize>`:
 
 **Daily Zombie Scan:**
 The bot checks for deleted/deactivated accounts daily and asks if you want to kick them. If none found, it sends a "no zombies found" message. Reply `/zombies confirm` when prompted to kick them.
+
+## Production (Railway / multi-group)
+
+The bot is already multi-group: each chat has its own settings, trusted users, strikes, games, etc.
+
+**Permissions (no silent failures):** If the bot can't delete, kick, mute, or announce, it tells the group in plain English (throttled so it doesn't spam). Admins can run `/rights` anytime.
+
+**Telegram flood limits:** Outbound API calls go through a paced gateway that respects `RetryAfter` and spaces global/per-chat traffic. Heavy jobs (`/tagall`, release broadcast) still send in chunks.
+
+**SQLite / data:**
+1. Mount **one** persistent volume (e.g. Railway volume at `/data`).
+2. Set `DATA_DIR=/data` (Docker already defaults to this).
+3. Run **exactly one** replica — two instances fighting over one SQLite file (or the same bot token) will break.
+4. Back up regularly:
+   - Owner: `/backupdb` in a private chat with the bot
+   - Or: `python scripts/backup_db.py` (writes under `backups/`)
+
+**Immune vs owner:** Put only yourself in `OWNER_IDS`. Put friends who should never be punished (but shouldn't get owner commands) in `IMMUNE_IDS`. Group owners use `/trust` for per-group immunity only.
 

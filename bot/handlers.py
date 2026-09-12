@@ -9,9 +9,9 @@ from telegram.constants import ChatType
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from bot import db
+from bot import db, rights
 from bot.commands import cmd, cmd_name
-from bot.config import OWNER_IDS
+from bot.config import OWNER_IDS, DATA_DIR, DB_PATH
 from bot.invite import ADD_TEXT, bot_username, pick_keyboard, url_buttons
 from bot.release import deliver_if_needed
 from bot.moderation import (
@@ -119,17 +119,32 @@ async def on_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     try:
         await message.delete()
-    except Exception:
+    except Exception as exc:
         log.exception("Could not delete sticker")
-        await message.reply_text(
-            "I saw a banned sticker but could not delete it. I need permission to delete messages."
+        missing = await rights.ensure_rights(
+            context, chat.id, "delete", alert_key="delete"
         )
+        if not missing:
+            await rights.alert_failure(
+                context,
+                chat.id,
+                "delete_fail",
+                exc,
+                prefix="I saw a banned sticker but couldn't delete it",
+            )
         return
 
     try:
         await apply_punishment(update, context, user, reason)
-    except Exception:
+    except Exception as exc:
         log.exception("Punishment failed")
+        await rights.alert_failure(
+            context,
+            chat.id,
+            "punish",
+            exc,
+            prefix="I removed the sticker but couldn't apply the warning/kick",
+        )
 
 
 async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1000,7 +1015,57 @@ async def cmd_kick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif len(args) > 1:
         reason = " ".join(args[1:]).strip() or reason
     ok = await kick(context, update.effective_chat.id, target.id)
+    if not ok:
+        # Background alert may already have posted; still answer the admin command.
+        await update.effective_message.reply_text(
+            "Kick failed. I need Ban users permission (and I can't kick owners/admins I didn't promote)."
+        )
+        return
     await announce_kick(context, update.effective_chat, target, reason, ok)
+
+
+async def cmd_rights(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show what admin rights the bot has in this group."""
+    if not await require_group_admin(update):
+        return
+    chat = update.effective_chat
+    assert chat
+    try:
+        me = await rights.get_bot_member(context, chat.id)
+    except Exception as exc:
+        await update.effective_message.reply_text(rights.friendly_error(exc))
+        return
+    await update.effective_message.reply_html(rights.format_bot_rights_report(me))
+
+
+async def cmd_backupdb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner-only: send a copy of the SQLite DB to this chat (prefer private)."""
+    user = update.effective_user
+    msg = update.effective_message
+    if not user or not msg:
+        return
+    if user.id not in OWNER_IDS:
+        await msg.reply_text("Only the bot owner can download the database.")
+        return
+    if not DB_PATH.is_file():
+        await msg.reply_text(f"No database file at {DB_PATH}")
+        return
+    try:
+        # Checkpoint WAL so the copy is consistent enough for backup.
+        with db.cursor() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception:
+        log.exception("wal_checkpoint before backup")
+    try:
+        await msg.reply_document(
+            document=DB_PATH,
+            filename=f"bot-backup-{int(time.time())}.db",
+            caption=f"SQLite backup from <code>{escape(str(DATA_DIR))}</code>",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        log.exception("backup send failed")
+        await msg.reply_text(rights.friendly_error(exc))
 
 
 async def _log_label(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> str:

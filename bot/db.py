@@ -247,6 +247,31 @@ def init() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_giveaway_history_chat
                 ON giveaway_history(chat_id, drawn_at DESC);
+            CREATE TABLE IF NOT EXISTS wordle_games (
+                chat_id INTEGER PRIMARY KEY,
+                word TEXT NOT NULL,
+                length INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                guesses TEXT NOT NULL DEFAULT '[]',
+                message_id INTEGER,
+                started_by INTEGER NOT NULL,
+                started_name TEXT NOT NULL,
+                started_at REAL NOT NULL,
+                ends_at REAL NOT NULL,
+                winner_id INTEGER,
+                winner_name TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_wordle_games_status_ends
+                ON wordle_games(status, ends_at);
+            CREATE TABLE IF NOT EXISTS wordle_used (
+                chat_id INTEGER NOT NULL,
+                word TEXT NOT NULL,
+                length INTEGER NOT NULL,
+                used_at REAL NOT NULL,
+                PRIMARY KEY (chat_id, word)
+            );
+            CREATE INDEX IF NOT EXISTS idx_wordle_used_chat_len
+                ON wordle_used(chat_id, length);
             """
         )
         _ensure_column(conn, "chat_settings", "log_chat_id", "INTEGER")
@@ -2049,3 +2074,209 @@ def get_giveaway_history(chat_id: int, limit: int = 10) -> list[dict]:
             "reroll_count": int(row["reroll_count"]),
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# Wordle
+# ---------------------------------------------------------------------------
+
+
+def _parse_wordle_guesses(raw: object) -> list[dict]:
+    try:
+        data = json.loads(raw) if raw else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.append(
+                {
+                    "user_id": int(item["user_id"]),
+                    "name": str(item.get("name") or "")[:40],
+                    "word": str(item.get("word") or "").upper(),
+                    "colors": str(item.get("colors") or ""),
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _wordle_row(row: sqlite3.Row) -> dict:
+    return {
+        "chat_id": int(row["chat_id"]),
+        "word": str(row["word"]).upper(),
+        "length": int(row["length"]),
+        "status": str(row["status"]),
+        "guesses": _parse_wordle_guesses(row["guesses"]),
+        "message_id": int(row["message_id"]) if row["message_id"] is not None else None,
+        "started_by": int(row["started_by"]),
+        "started_name": str(row["started_name"] or ""),
+        "started_at": float(row["started_at"]),
+        "ends_at": float(row["ends_at"]),
+        "winner_id": int(row["winner_id"]) if row["winner_id"] is not None else None,
+        "winner_name": str(row["winner_name"] or "") if row["winner_name"] else None,
+    }
+
+
+def get_active_wordle(chat_id: int) -> dict | None:
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT * FROM wordle_games WHERE chat_id=? AND status='active'",
+            (chat_id,),
+        ).fetchone()
+    return _wordle_row(row) if row else None
+
+
+def get_wordle_game(chat_id: int) -> dict | None:
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT * FROM wordle_games WHERE chat_id=?",
+            (chat_id,),
+        ).fetchone()
+    return _wordle_row(row) if row else None
+
+
+def list_active_wordles_due(now: float) -> list[dict]:
+    with cursor() as conn:
+        rows = conn.execute(
+            "SELECT * FROM wordle_games WHERE status='active' AND ends_at<=?",
+            (now,),
+        ).fetchall()
+    return [_wordle_row(row) for row in rows]
+
+
+def list_used_wordle_words(chat_id: int, length: int) -> set[str]:
+    with cursor() as conn:
+        rows = conn.execute(
+            "SELECT word FROM wordle_used WHERE chat_id=? AND length=?",
+            (chat_id, length),
+        ).fetchall()
+    return {str(row["word"]).upper() for row in rows}
+
+
+def clear_used_wordle_words(chat_id: int, length: int) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "DELETE FROM wordle_used WHERE chat_id=? AND length=?",
+            (chat_id, length),
+        )
+
+
+def mark_wordle_word_used(chat_id: int, word: str, length: int) -> None:
+    with cursor() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO wordle_used(chat_id, word, length, used_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (chat_id, word.upper(), length, time.time()),
+        )
+
+
+def start_wordle_game(
+    chat_id: int,
+    word: str,
+    length: int,
+    started_by: int,
+    started_name: str,
+    ends_at: float,
+) -> dict | None:
+    """Create an active game. Returns None if one is already active."""
+    now = time.time()
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT status FROM wordle_games WHERE chat_id=?",
+            (chat_id,),
+        ).fetchone()
+        if row and str(row["status"]) == "active":
+            return None
+        conn.execute(
+            """
+            INSERT INTO wordle_games(
+                chat_id, word, length, status, guesses, message_id,
+                started_by, started_name, started_at, ends_at,
+                winner_id, winner_name
+            ) VALUES (?, ?, ?, 'active', '[]', NULL, ?, ?, ?, ?, NULL, NULL)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                word=excluded.word,
+                length=excluded.length,
+                status='active',
+                guesses='[]',
+                message_id=NULL,
+                started_by=excluded.started_by,
+                started_name=excluded.started_name,
+                started_at=excluded.started_at,
+                ends_at=excluded.ends_at,
+                winner_id=NULL,
+                winner_name=NULL
+            """,
+            (
+                chat_id,
+                word.upper(),
+                length,
+                started_by,
+                started_name[:40],
+                now,
+                ends_at,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO wordle_used(chat_id, word, length, used_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (chat_id, word.upper(), length, now),
+        )
+    return get_wordle_game(chat_id)
+
+
+def set_wordle_message_id(chat_id: int, message_id: int | None) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE wordle_games SET message_id=? WHERE chat_id=?",
+            (message_id, chat_id),
+        )
+
+
+def update_wordle_guesses(chat_id: int, guesses: list[dict]) -> None:
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE wordle_games SET guesses=? WHERE chat_id=? AND status='active'",
+            (json.dumps(guesses), chat_id),
+        )
+
+
+def finish_wordle(
+    chat_id: int,
+    status: str,
+    *,
+    winner_id: int | None = None,
+    winner_name: str | None = None,
+) -> dict | None:
+    """Mark active game finished. Returns updated row, or None if not active."""
+    with cursor() as conn:
+        row = conn.execute(
+            "SELECT status FROM wordle_games WHERE chat_id=?",
+            (chat_id,),
+        ).fetchone()
+        if not row or str(row["status"]) != "active":
+            return None
+        conn.execute(
+            """
+            UPDATE wordle_games
+            SET status=?, winner_id=?, winner_name=?
+            WHERE chat_id=? AND status='active'
+            """,
+            (
+                status,
+                winner_id,
+                (winner_name[:40] if winner_name else None),
+                chat_id,
+            ),
+        )
+    return get_wordle_game(chat_id)

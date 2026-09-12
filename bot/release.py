@@ -6,10 +6,10 @@ from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType
-from telegram.error import Forbidden, RetryAfter, TelegramError
+from telegram.error import Forbidden, TelegramError
 from telegram.ext import ContextTypes
 
-from bot import db
+from bot import db, tg
 from bot.commands import cmd
 from bot.config import OWNER_IDS
 from bot.invite import bot_username, url_buttons
@@ -77,7 +77,8 @@ def _notes_markup(username: str | None) -> InlineKeyboardMarkup:
 async def send_release_card(bot, user_id: int, username: str | None) -> bool:
     html = release_html()
     try:
-        await bot.send_message(
+        await tg.send_message(
+            bot,
             user_id,
             html,
             parse_mode="HTML",
@@ -89,20 +90,6 @@ async def send_release_card(bot, user_id: int, username: str | None) -> bool:
         db.drop_bot_user(user_id)
         log.info("release: %s blocked the bot", user_id)
         return False
-    except RetryAfter as exc:
-        await asyncio.sleep(float(exc.retry_after) + 0.5)
-        try:
-            await bot.send_message(
-                user_id,
-                html,
-                parse_mode="HTML",
-                reply_markup=_notes_markup(username),
-                disable_web_page_preview=True,
-            )
-            return True
-        except TelegramError:
-            log.exception("release retry failed for %s", user_id)
-            return False
     except TelegramError:
         log.exception("release send failed for %s", user_id)
         return False
